@@ -47,12 +47,21 @@
 # USAGE:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File hardware-probe.ps1
 #   powershell -NoProfile -ExecutionPolicy Bypass -File hardware-probe.ps1 -Quiet
+#
+#   -IniPath <path>  also write a flat [hardware] INI of the same result,
+#                    for callers with no JSON parser (the NSIS installer).
+#                    hardware.json is written either way.
 # ===============================================================
 
 [CmdletBinding()]
 param(
     [string]$OutputPath = (Join-Path $PSScriptRoot 'hardware.json'),
     [string]$ModelsDir  = (Join-Path $PSScriptRoot 'models'),
+    # Optional flat-INI copy of the same probe result, for callers that have no
+    # JSON parser. The NSIS installer reads this with ReadINIStr rather than
+    # shelling back out to PowerShell to re-parse hardware.json. hardware.json
+    # is still written either way -- this is an addition, not a mode.
+    [string]$IniPath = '',
     [switch]$Quiet
 )
 
@@ -417,7 +426,7 @@ if (-not $gpu) {
 }
 
 if ($gpu.detection_method -eq 'none') {
-    Write-Warn "No dedicated GPU found — CPU/RAM-only mode."
+    Write-Warn "No dedicated GPU found -- CPU/RAM-only mode."
 } else {
     Write-Ok ("GPU: {0} ({1} GB VRAM, via {2})" -f `
               $gpu.name, $gpu.vram_gb, $gpu.detection_method)
@@ -505,8 +514,39 @@ try {
     $json = $payload | ConvertTo-Json -Depth 8
     Set-Content -Path $OutputPath -Value $json -Encoding UTF8 -Force
     Write-Ok ("Wrote {0}" -f $OutputPath)
-    exit 0
 } catch {
     Write-Err ("Failed to write hardware.json: {0}" -f $_.Exception.Message)
     exit 1
 }
+
+# --- OPTIONAL flat-INI copy ------------------------------------
+# Written ASCII so it stays readable to ReadINIStr regardless of the
+# caller's code page. A caller that asked for this file and did not get
+# it is a failure, not a warning: the installer sizes its model catalogue
+# from these numbers, and silently missing values would mean recommending
+# a model that does not fit the machine.
+if ($IniPath -ne '') {
+    try {
+        $ini = @(
+            '[hardware]'
+            ('gpu_name='         + $gpu.name)
+            ('gpu_vendor='       + $gpu.vendor)
+            ('vram_gb='          + [int]$gpu.vram_gb)
+            ('detection_method=' + $gpu.detection_method)
+            ('ram_gb='           + [int]$ramGB)
+            ('disk_free_gb='     + [int]$disk.free_gb)
+            ('cpu_name='         + $cpu.name)
+            ('cpu_cores='        + [int]$cpu.cores)
+            ('is_virtualized='   + ([int][bool]$isVm))
+            ('recommended_tier=' + $tier)
+            ('warning_count='    + $warnings.Count)
+        )
+        Set-Content -Path $IniPath -Value $ini -Encoding ascii -Force
+        Write-Ok ("Wrote {0}" -f $IniPath)
+    } catch {
+        Write-Err ("Failed to write {0}: {1}" -f $IniPath, $_.Exception.Message)
+        exit 1
+    }
+}
+
+exit 0
