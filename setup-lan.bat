@@ -81,24 +81,23 @@ echo.
 :: ---------------------------------------------------------------
 echo  [..] Adding firewall rules...
 
+:: Ports !LLM_PORT! (llama-server) and !SEARCH_PORT! (search proxy) do NOT get
+:: a rule. Both bind 127.0.0.1 only -- launch.bat passes --host 127.0.0.1 and
+:: the proxy listens on http://127.0.0.1:!SEARCH_PORT!/ -- so nothing on the
+:: LAN can reach them and an inbound rule only stands to expose whatever else
+:: might bind those ports later. Only !WEB_PORT!, the file server the phone
+:: actually talks to, needs to be reachable. Earlier versions did open them,
+:: so they are removed here rather than left behind.
 netsh advfirewall firewall show rule name="Gemma4-LLM" >nul 2>&1
-if errorlevel 1 (
-    netsh advfirewall firewall add rule name="Gemma4-LLM" dir=in action=allow protocol=TCP localport=!LLM_PORT! profile=private,public remoteip=LocalSubnet >nul
-    echo  [OK] Firewall rule added: Gemma4-LLM (port !LLM_PORT!, llama.cpp, local subnet only)
-) else (
-    rem Repair any pre-existing (possibly wide-open) rule from an older run.
-    netsh advfirewall firewall set rule name="Gemma4-LLM" new dir=in action=allow protocol=TCP localport=!LLM_PORT! profile=private,public remoteip=LocalSubnet >nul
-    echo  [OK] Firewall rule updated: Gemma4-LLM (re-scoped to local subnet only)
+if not errorlevel 1 (
+    netsh advfirewall firewall delete rule name="Gemma4-LLM" >nul
+    echo  [OK] Firewall rule removed: Gemma4-LLM ^(port !LLM_PORT! is loopback-only^)
 )
 
 netsh advfirewall firewall show rule name="Gemma4-Search" >nul 2>&1
-if errorlevel 1 (
-    netsh advfirewall firewall add rule name="Gemma4-Search" dir=in action=allow protocol=TCP localport=11435 profile=private,public remoteip=LocalSubnet >nul
-    echo  [OK] Firewall rule added: Gemma4-Search (port 11435, search proxy, local subnet only)
-) else (
-    rem Repair any pre-existing (possibly wide-open) rule from an older run.
-    netsh advfirewall firewall set rule name="Gemma4-Search" new dir=in action=allow protocol=TCP localport=11435 profile=private,public remoteip=LocalSubnet >nul
-    echo  [OK] Firewall rule updated: Gemma4-Search (re-scoped to local subnet only)
+if not errorlevel 1 (
+    netsh advfirewall firewall delete rule name="Gemma4-Search" >nul
+    echo  [OK] Firewall rule removed: Gemma4-Search ^(port !SEARCH_PORT! is loopback-only^)
 )
 
 netsh advfirewall firewall show rule name="Gemma4-Web" >nul 2>&1
@@ -276,8 +275,6 @@ echo.
 echo   launch.bat will show the exact URLs when it starts.
 echo.
 echo   To UNDO these changes later, run:
-echo     netsh advfirewall firewall delete rule name="Gemma4-LLM"
-echo     netsh advfirewall firewall delete rule name="Gemma4-Search"
 echo     netsh advfirewall firewall delete rule name="Gemma4-Web"
 echo     netsh advfirewall firewall delete rule name="Gemma4-mDNS"
 echo     netsh http delete urlacl url=http://+:11435/
