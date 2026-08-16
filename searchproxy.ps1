@@ -11,14 +11,14 @@
   rather than a hardcoded vendor.
 
   Why: the front page says "No account, no sign-up, no email" — and then web search asks the
-  user to create an Ollama account and paste an API key. THE DEFAULT IS THE DEFECT. Most
-  people never change a setting, so shipping ollama as the default means the product's
-  headline promise is false for almost everyone who tries search. Nothing is taken away —
-  SEARCH_PROVIDER=ollama restores the old path byte for byte — but it becomes opt-in, chosen
-  by someone who already has a key rather than imposed on someone who does not.
+  user to create an Ollama account and paste an API key. This opens a second door without
+  closing the first: set SEARCH_URL and the proxy uses it; set nothing and it relays to
+  Ollama exactly as it does today. NO EXISTING INSTALL CHANGES BEHAVIOUR.
 
   PROVIDERS
-    http        (DEFAULT)  forward to SEARCH_URL — a self-hosted SearxNG, or anything else
+    auto        (DEFAULT)  use SEARCH_URL if it is set, else fall back to ollama. Chosen so
+                           the default can never be worse than what shipped before.
+    http                   forward to SEARCH_URL — a self-hosted SearxNG, or anything else
                            speaking {query,max_results} -> {results:[{title,url,content}]}.
                            Server-side so CORS does not apply: the browser could never call a
                            search engine directly, which is why this proxy exists at all.
@@ -26,9 +26,8 @@
                            empty — "not configured" and "found nothing" must not look alike,
                            which is the failure this whole file is written against.
     ollama                 relay to https://ollama.com/api, forwarding the Authorization
-                           header exactly as before. Unchanged, and still fully supported —
-                           just no longer the default, because a default that requires an
-                           account contradicts the product it ships in.
+                           header exactly as before. Unchanged, and still what you get when
+                           no SEARCH_URL is configured.
 
   Bound to loopback only, as before: the file server's /search route reaches it via 127.0.0.1,
   so it is not exposed on the LAN and needs no auth of its own.
@@ -41,11 +40,19 @@ $ErrorActionPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $Port     = if ($env:GEMMA_SEARCH_PORT) { [int]$env:GEMMA_SEARCH_PORT } else { 11435 }
-# Default is 'http', NOT 'ollama'. The front page promises "No account, no sign-up,
-# no email"; defaulting to a provider that requires an Ollama account and an API key
-# contradicts that for every user who never changes a setting -- which is most of them.
-# Ollama still works, byte for byte, for anyone who has a key: SEARCH_PROVIDER=ollama.
-$Provider = if ($env:SEARCH_PROVIDER)   { $env:SEARCH_PROVIDER.ToLower() } else { 'http' }
+# Default: 'auto'. Use SEARCH_URL if one is configured, otherwise relay to Ollama
+# exactly as before.
+#
+# This deliberately does NOT flip the default to 'http'. An earlier draft did, and
+# it was a REGRESSION: SEARCH_URL is unset on a fresh install, so every new user
+# would have got a 502 where an Ollama key previously worked. Making search worse
+# by default is not a fix for search requiring an account.
+#
+# So the change is strictly additive. Nothing that works today stops working; a
+# user who points SEARCH_URL at a keyless backend gets one, and it is chosen
+# automatically rather than needing two variables set.
+$Provider = if ($env:SEARCH_PROVIDER) { $env:SEARCH_PROVIDER.ToLower() } else { 'auto' }
+if ($Provider -eq 'auto') { $Provider = if ($env:SEARCH_URL) { 'http' } else { 'ollama' } }
 # Where 'http' provider sends the search. Any service speaking {query,max_results} ->
 # {results:[{title,url,content}]}. No default: an unset URL means the provider is not
 # configured, which is reported rather than guessed at.
