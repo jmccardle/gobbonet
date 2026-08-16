@@ -33,7 +33,7 @@
   so it is not exposed on the LAN and needs no auth of its own.
 
   Run:  powershell -NoProfile -ExecutionPolicy Bypass -File searchproxy.ps1
-  Env:  GEMMA_SEARCH_PORT (default 11435)   SEARCH_PROVIDER (default http)
+  Env:  GEMMA_SEARCH_PORT (default 11435)   SEARCH_PROVIDER (default auto: ollama unless SEARCH_URL is set)
 #>
 
 $ErrorActionPreference = 'SilentlyContinue'
