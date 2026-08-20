@@ -494,7 +494,12 @@ if ($Emit -eq 'batch') {
         ('set "MODEL_THINK_FMT=' + (ConvertTo-BatchSafe $info.thinkingFormat) + '"'),
         ('set "MODEL_USE_JINJA=' + ([int]$info.useJinja) + '"'),
         ('set "MODEL_CHAT_TEMPLATE=' + (ConvertTo-BatchSafe $info.chatTemplate) + '"'),
-        ('set "MODEL_CHAT_TEMPLATE_FILE=' + (ConvertTo-BatchSafe $info.chatTemplateFile) + '"'),
+        # Left unscrubbed: this one is a path ("models\<sidecar>.jinja"), and
+        # '&' and '^' are legal in Windows filenames. Stripping them hands
+        # launch.bat a path that does not exist, so a sidecar the user really
+        # installed silently stops being used. It is inside `set "..."` and no
+        # filename may contain '"', so it cannot end the set line.
+        ('set "MODEL_CHAT_TEMPLATE_FILE=' + $info.chatTemplateFile + '"'),
         ('set "MODEL_TEMPLATE_HASH=' + (ConvertTo-BatchSafe $info.templateHash) + '"')
     )
     if ($OutFile) {

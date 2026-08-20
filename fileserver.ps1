@@ -1100,9 +1100,18 @@ function Build-LaunchScript {
     # A built-in name is a STRING -> --chat-template (selects the C++ template).
     # These are not interchangeable: passing a file path to --chat-template
     # makes llama-server treat the path text itself as a literal template.
+    # NOT scrubbed with ConvertTo-CmdArgSafe: this is a filesystem path, and
+    # '&', '^' and '!' are all legal in Windows paths. $Root is wherever the
+    # user unpacked GobboNet, so an install under "C:\AI & ML\gobbonet" would
+    # have its sidecar path rewritten to a directory that does not exist --
+    # after Test-IsUsableTemplateFile above already proved the real one does.
+    # Validating one string and launching a different one is precisely the
+    # failure this file's other guards exist to prevent. The value is inside
+    # "{0}" and no Windows filename may contain '"', so cmd cannot be escaped
+    # out of here anyway.
     if ($chatTemplateFile -ne '') {
         $sidecarAbs = if ([System.IO.Path]::IsPathRooted($chatTemplateFile)) { $chatTemplateFile } else { Join-Path $Root $chatTemplateFile }
-        $argList += @('--chat-template-file', ('"{0}"' -f (ConvertTo-CmdArgSafe $sidecarAbs)))
+        $argList += @('--chat-template-file', ('"{0}"' -f $sidecarAbs))
     } elseif ($chatTemplate) {
         # Quoted AND scrubbed: this line is written into a .cmd and executed, so
         # an unquoted value carrying '&' would chain a second command. The values
