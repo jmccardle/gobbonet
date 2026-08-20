@@ -468,6 +468,84 @@ func TestLegacySecretVerifiesAndUpgrades(t *testing.T) {
 	}
 }
 
+// A pbkdf2-sha256 secret from upstream launch.bat must log in and must NOT be
+// rewritten: launch.bat re-supplies it through GEMMA_ACCESS_SECRET on every
+// start, where the environment beats config.toml, so an upgrade would be
+// rewritten on every login and never take.
+//
+// The hash is a fixed vector, computed outside this codebase (PBKDF2-HMAC-SHA256
+// over the UTF-8 password and the DECODED salt bytes, 210,000 iterations, 32
+// bytes out). Round-tripping our own derivation would still pass if we read the
+// salt as text the way the legacy format does, which is exactly the mistake
+// worth pinning against.
+func TestPBKDF2SecretVerifiesAndIsNotUpgraded(t *testing.T) {
+	srv, cfg := newTestServer(t)
+
+	const password = "correct horse battery"
+	const secret = "pbkdf2-sha256:210000:0f1e2d3c4b5a69788796a5b4c3d2e1f0:" +
+		"4018e5fccdda737877ea13a5e2314667ddbe3c061092096b1cb9091e85d63dd5"
+
+	// The startup gate and the login path must agree that this is usable, or
+	// the server refuses to boot on a secret it can actually verify.
+	if !auth.SecretConfigured(secret) {
+		t.Fatal("SecretConfigured rejected a pbkdf2 secret that Verify accepts")
+	}
+
+	srv.cfg.RequireAuth = true
+	srv.secret = secret
+
+	req := newReq(http.MethodPost, "/login", strings.NewReader("password="+url.QueryEscape(password)))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("pbkdf2 login: got %d, want 302", rec.Code)
+	}
+
+	srv.secretMu.RLock()
+	after := srv.secret
+	srv.secretMu.RUnlock()
+	if after != secret {
+		t.Errorf("the pbkdf2 secret was rewritten: %q", after)
+	}
+	raw, err := os.ReadFile(cfg.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "$argon2id$") {
+		t.Error("logging in with a pbkdf2 secret rewrote access_secret in the config file")
+	}
+
+	if ok, _, err := auth.Verify(secret, "wrong password"); ok || err != nil {
+		t.Errorf("a wrong password verified against the pbkdf2 secret (ok=%v err=%v)", ok, err)
+	}
+}
+
+// A pbkdf2 secret we cannot use must be malformed, not "no password set" --
+// SecretConfigured returning false there is what makes the server serve
+// everything with no auth at all.
+func TestMalformedPBKDF2SecretIsRejected(t *testing.T) {
+	const good = "pbkdf2-sha256:210000:0f1e2d3c4b5a69788796a5b4c3d2e1f0:" +
+		"4018e5fccdda737877ea13a5e2314667ddbe3c061092096b1cb9091e85d63dd5"
+
+	for _, tc := range []struct{ name, secret string }{
+		{"zero iterations", strings.Replace(good, ":210000:", ":0:", 1)},
+		{"odd-length salt", "pbkdf2-sha256:210000:0f1:abcd"},
+		{"empty hash", "pbkdf2-sha256:210000:0f1e2d3c4b5a69788796a5b4c3d2e1f0:"},
+		{"unknown kdf", "pbkdf2-sha512:210000:0f1e:abcd"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if auth.SecretConfigured(tc.secret) {
+				t.Error("SecretConfigured accepted it")
+			}
+			if _, _, err := auth.Verify(tc.secret, "correct horse battery"); err == nil {
+				t.Error("Verify did not report it as malformed")
+			}
+		})
+	}
+}
+
 func TestLoginRateLimited(t *testing.T) {
 	srv, _ := newTestServer(t)
 	secret, err := auth.NewSecret("correct horse battery")
