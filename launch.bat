@@ -450,6 +450,18 @@ exit /b
 :: All of this happens inside PowerShell so the plaintext never lands in a
 :: batch variable, the environment, or the console.
 ::
+:: The derivation is wrapped in try/catch with -ErrorAction Stop because the
+:: four-argument Rfc2898DeriveBytes(string, byte[], int, HashAlgorithmName)
+:: needs .NET Framework 4.7.2, and Windows PowerShell 5.1 on Windows 10 before
+:: 1803 or Server 2016 runs on 4.6.x, which has only the SHA-1 three-argument
+:: form. New-Object reports a missing overload as a NON-terminating error, so
+:: without both the guard and -ErrorAction Stop the script sailed on: $kdf
+:: stayed null, $kdf.GetBytes(32) failed as a statement-terminating error that
+:: does not stop a script, and Set-Content wrote
+:: "pbkdf2-sha256:210000:<salt>:" with no hash at all -- followed by "[OK]
+:: Password set." in green. Silent success is the one outcome a password
+:: setup routine must never produce.
+::
 :: We write the PowerShell to a temp .ps1 and run it with -File rather than
 :: cramming it into -Command with caret line-continuations. The -File form is
 :: immune to batch's quoting / caret / delayed-expansion quirks, which is the
@@ -490,9 +502,20 @@ echo     if ^($t1 -ne $t2^) { Write-Host '  Passwords did not match -- try again
 echo     $saltBytes = New-Object byte[] 16
 echo     [Security.Cryptography.RandomNumberGenerator]::Create^(^).GetBytes^($saltBytes^)
 echo     $salt = ^([BitConverter]::ToString^($saltBytes^) -replace '-'^).ToLower^(^)
-echo     $kdf = New-Object System.Security.Cryptography.Rfc2898DeriveBytes^($t1, $saltBytes, $iters, [System.Security.Cryptography.HashAlgorithmName]::SHA256^)
-echo     $hash = ^([BitConverter]::ToString^($kdf.GetBytes^(32^)^) -replace '-'^).ToLower^(^)
-echo     $kdf.Dispose^(^)
+echo     try {
+echo         $kdf = New-Object System.Security.Cryptography.Rfc2898DeriveBytes^($t1, $saltBytes, $iters, [System.Security.Cryptography.HashAlgorithmName]::SHA256^) -ErrorAction Stop
+echo         if ^($null -eq $kdf^) { throw 'Rfc2898DeriveBytes could not be constructed.' }
+echo         $hash = ^([BitConverter]::ToString^($kdf.GetBytes^(32^)^) -replace '-'^).ToLower^(^)
+echo         $kdf.Dispose^(^)
+echo     } catch {
+echo         Write-Host '  [ERROR] Could not derive the password hash. NOTHING was saved.' -Foreground Red
+echo         Write-Host ^('          ' + $_.Exception.Message^) -Foreground Red
+echo         Write-Host '          This needs .NET Framework 4.7.2 or newer. Windows 10' -Foreground Red
+echo         Write-Host '          before 1803 and Server 2016 ship 4.6.x, where this' -Foreground Red
+echo         Write-Host '          constructor does not exist. Install .NET Framework 4.8' -Foreground Red
+echo         Write-Host '          and run launch.bat again.' -Foreground Red
+echo         exit 1
+echo     }
 echo     Set-Content -Path $env:GOBBONET_SECRET_OUT -Value ^('pbkdf2-sha256:' + $iters + ':' + $salt + ':' + $hash^) -Encoding ascii -NoNewline
 echo     Write-Host '  [OK] Password set.' -Foreground Green
 echo     break
