@@ -350,9 +350,7 @@ async function restoreFromServer(opts) {
     // this blob is not necessarily something this user wrote. Clear the flags
     // that would make boot execute code out of it; the code itself is kept so
     // it can be read and switched on here. See neutralizeUntrustedCode.
-    const neutralized = (typeof neutralizeUntrustedCode === 'function')
-      ? neutralizeUntrustedCode(parsed)
-      : { cards: 0, extensions: false };
+    const neutralized = neutralizeUntrustedCode(parsed);
     if (neutralized.cards || neutralized.extensions) {
       text = JSON.stringify(parsed);   // localStorage path writes the raw text
       if (!opts.silent) {

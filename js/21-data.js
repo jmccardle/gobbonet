@@ -164,9 +164,7 @@ function importData(fileInput, type) {
       // A backup file comes from wherever the user got it, and applyExtensions()
       // below injects <script> from it while boot runs card code. Same rule as
       // the character-card import: the content is kept, the run flags are not.
-      const neutralized = (typeof neutralizeUntrustedCode === 'function')
-        ? neutralizeUntrustedCode(state)
-        : { cards: 0, extensions: false };
+      const neutralized = neutralizeUntrustedCode(state);
       state.macros         = Array.isArray(data.macros) ? data.macros : DEFAULT_MACROS.map(m => ({ ...m }));
       state.searchEnabled  = data.searchEnabled  || false;
       saveState();
