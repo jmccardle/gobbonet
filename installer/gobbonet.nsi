@@ -673,6 +673,11 @@ Section "GobboNet" SecMain
   File "${PAYLOAD}\hardware-probe.ps1"
   File "${PAYLOAD}\identify-model.ps1"
   File "${PAYLOAD}\fileserver.ps1"
+  ; launch.bat starts the search proxy by path, not from an inline blob, so
+  ; the script has to be next to it. Omitting it does not fail the install --
+  ; it fails later, as ten seconds of retries and "Search proxy failed", which
+  ; reads as "web search is unavailable" rather than "a file is missing".
+  File "${PAYLOAD}\searchproxy.ps1"
 
   ; Carry the probe result forward. $PLUGINSDIR is deleted when the
   ; installer exits, and launch.bat reads hardware.json from its own

@@ -105,7 +105,14 @@ cp -r "$ROOT/web" "$PAYLOAD/web"
 
 # Scripts kept from the Windows lineage. launch.bat still owns adding further
 # models; hardware-probe.ps1 is called by the installer's probe page.
-for f in launch.bat setup-lan.bat hardware-probe.ps1 identify-model.ps1 fileserver.ps1; do
+#
+# searchproxy.ps1 is on this list because launch.bat invokes it by path
+# (`-File "%~dp0searchproxy.ps1"`) rather than carrying it inline. Every path
+# through launch.bat falls into :start_proxy, so an installed tree missing the
+# file gets ten seconds of retries and then "Search proxy failed" -- a broken
+# install that reports itself as a missing feature. The loop below aborts on an
+# absent source for exactly this reason: the payload list is the contract.
+for f in launch.bat setup-lan.bat hardware-probe.ps1 identify-model.ps1 fileserver.ps1 searchproxy.ps1; do
     [ -f "$ROOT/$f" ] || { echo "ERROR: $f missing from $ROOT" >&2; exit 1; }
     cp "$ROOT/$f" "$PAYLOAD/$f"
 done
