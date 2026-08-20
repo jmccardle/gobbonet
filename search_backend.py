@@ -2,11 +2,11 @@
 """A keyless web-search backend for GobboNet. One file, no account, no API key.
 
     pip install ddgs
-    python search_backend.py            # listens on 127.0.0.1:11435
+    python search_backend.py            # listens on 127.0.0.1:11438
 
 Then set GobboNet's SEARCH_URL to:
 
-    http://127.0.0.1:11435/web_search
+    http://127.0.0.1:11438/web_search
 
 That is the whole thing. It speaks the contract the UI already uses --
 POST {"query","max_results"} -> {"results":[{"title","url","content"}]} -- so
@@ -44,7 +44,17 @@ import json
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-DEFAULT_PORT = 11435
+# NOT 11435. That is searchproxy.ps1's own port, and launch.bat starts the proxy
+# before anything else, so the documented setup -- run this on 11435, point
+# SEARCH_URL at it -- points the proxy at ITSELF. The proxy's listener is a
+# synchronous GetContext() loop, so it cannot service a request it is blocked
+# inside Invoke-WebRequest making: the call times out after 25s, hits the catch,
+# and answers {"results":[]}. The happy path lands in exactly the silent-empty
+# failure this backend exists to avoid.
+#
+# 11438 is the first port above the block GobboNet already uses: 11434/11437
+# llama.cpp, 11435 search proxy, 11436 embeddings.
+DEFAULT_PORT = 11438
 MAX_BODY = 1 << 20  # 1 MiB; a search query is never larger
 
 
