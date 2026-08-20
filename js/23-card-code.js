@@ -298,11 +298,25 @@ function updateCardCodeStatus() {
  * its author's JavaScript the moment you activate it. The code is kept
  * so it can be read and opted into; the flag is always cleared.
  */
+function applyImportedCardCode(card, rawCode) {
+  if (typeof rawCode === 'string' && rawCode.trim()) {
+    card.customCode = rawCode;
+    card.customCodeEnabled = false;
+    console.warn('[card-code] imported card "' + (card.name || '?') +
+                 '" carries custom code. It is DISABLED until you read it ' +
+                 'and switch it on in the character editor.');
+  } else {
+    card.customCode = '';
+    card.customCodeEnabled = false;
+  }
+  return card;
+}
+
 /**
  * Strip the "and run it" bit out of a whole state blob that did not originate
  * on this device.
  *
- * applyImportedCardCode below covers the character-card file import. It was the
+ * applyImportedCardCode above covers the character-card file import. It was the
  * only door with a lock on it. Two others reach the same executors:
  *
  *   - restoreFromServer() in 06-state-sync.js writes the /state blob straight
@@ -312,7 +326,7 @@ function updateCardCodeStatus() {
  *     with customCodeEnabled already true, or an extensions list, and boot
  *     would run it. The restore that fires when local storage is empty does
  *     not even prompt.
- *   - importAllData('all') in 21-data.js takes a backup file from anywhere and
+ *   - importData(fileInput, 'all') in 21-data.js takes a backup file from anywhere and
  *     calls applyExtensions() in the same tick.
  *
  * The rule is the one applyImportedCardCode already documents: the decision to
@@ -350,18 +364,4 @@ function neutralizeUntrustedCode(blob) {
                  '. Kept, but switched OFF. Review it and enable it here if you want it.');
   }
   return result;
-}
-
-function applyImportedCardCode(card, rawCode) {
-  if (typeof rawCode === 'string' && rawCode.trim()) {
-    card.customCode = rawCode;
-    card.customCodeEnabled = false;
-    console.warn('[card-code] imported card "' + (card.name || '?') +
-                 '" carries custom code. It is DISABLED until you read it ' +
-                 'and switch it on in the character editor.');
-  } else {
-    card.customCode = '';
-    card.customCodeEnabled = false;
-  }
-  return card;
 }
