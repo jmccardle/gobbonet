@@ -250,11 +250,18 @@ if not defined ACCESS_SECRET (
     exit /b 1
 )
 
-:: Ask the consumer's own question -- fileserver.ps1 tests this exact
-:: pattern at startup, so a pass here cannot become a failure there.
+:: Ask the consumer's own question -- fileserver.ps1 accepts these two
+:: shapes at startup, so a pass here cannot become a failure there.
+::
+:: BOTH must be listed. This check runs on every launch, including the one
+:: that just called :setup_password a few lines above. When it knew only
+:: the legacy shape it rejected the pbkdf2-sha256 line setup had written
+:: seconds earlier, on a fresh install, and the remedy it prints -- delete
+:: the file and run again -- wrote the same rejected line straight back.
+:: Keep this pattern identical to the one in :setup_password's readback.
 if not defined HAVE_PS goto :secret_shape_ok
 set "GN_PWCHECK=!ACCESS_SECRET!"
-powershell -NoProfile -Command "if ($env:GN_PWCHECK -match '^([0-9a-fA-F]+):([0-9a-fA-F]+)$') { exit 0 } else { exit 1 }" >nul 2>&1
+powershell -NoProfile -Command "if ($env:GN_PWCHECK -match '^pbkdf2-sha256:\d+:[0-9a-fA-F]+:[0-9a-fA-F]+$' -or $env:GN_PWCHECK -match '^[0-9a-fA-F]+:[0-9a-fA-F]+$') { exit 0 } else { exit 1 }" >nul 2>&1
 if errorlevel 1 goto :secret_shape_bad
 set "GN_PWCHECK="
 goto :secret_shape_ok
@@ -263,7 +270,8 @@ goto :secret_shape_ok
 set "GN_PWCHECK="
 echo.
 echo  [ERROR] .gobbonet-secret is malformed. Expected one line of
-echo          ^<hex^>:^<hex^> with no trailing newline.
+echo          pbkdf2-sha256:^<iters^>:^<hex^>:^<hex^>, or the legacy
+echo          ^<hex^>:^<hex^>, with no trailing newline.
 echo.
 echo          Fix: delete it and run launch.bat again to set a new one:
 echo             del "!SECRET_FILE!"

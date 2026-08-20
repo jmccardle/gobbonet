@@ -245,8 +245,9 @@ if ($AccessHash -eq '') {
     Say "        This is NOT a port or firewall problem -- the server exited" 'Red'
     Say "        before it tried to listen." 'Red'
     Say ("        Check .gobbonet-secret in {0} -- it must be one line of" -f $Root) 'Red'
-    Say "        <hex>:<hex> with no trailing newline. If it is empty or" 'Red'
-    Say "        truncated, delete it and run launch.bat to set a new password." 'Red'
+    Say "        pbkdf2-sha256:<iters>:<hex>:<hex>, or the legacy <hex>:<hex>," 'Red'
+    Say "        with no trailing newline. If it is empty or truncated, delete" 'Red'
+    Say "        it and run launch.bat to set a new password." 'Red'
     exit 1
 }
 $LlmApiKey = Get-EnvOrDefault 'GEMMA_LLM_API_KEY' ''
