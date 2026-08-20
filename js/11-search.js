@@ -15,39 +15,72 @@ function toggleSearch() {
   document.getElementById('search-toggle').classList.toggle('active', searchEnabled);
 }
 
+/* Which backend the proxy is relaying to, as reported by /health.
+   Cached: the provider is fixed when searchproxy.ps1 starts, so it cannot
+   change under a loaded page, and the search path asks on every query. */
+let searchProviderName = null;
+
+async function getSearchProvider() {
+  if (searchProviderName) return searchProviderName;
+  const resp = await fetch(SEARCH_PROXY_URL + '/health');
+  if (!resp.ok) throw new Error(`proxy health check failed: HTTP ${resp.status}`);
+  // A proxy older than the provider seam answers {"status":"ok"} with no
+  // provider field. That proxy relays to ollama.com and nothing else, so
+  // naming it here is a fact about it, not a guess.
+  searchProviderName = (await resp.json()).provider || 'ollama';
+  return searchProviderName;
+}
+
+/* Why search is not going to run, or null when it can.
+   The API key is ollama.com's, and only the ollama provider ever sends it
+   anywhere. Refusing to search without one when SEARCH_URL points at a
+   self-hosted backend is what made "no account, no sign-up" untrue for
+   exactly the people the provider seam is for. */
+async function searchGateMessage() {
+  if (state.settings.apiKey) return null;
+  let provider;
+  try {
+    provider = await getSearchProvider();
+  } catch (e) {
+    // Say the proxy is down. Blaming a missing key here sends the user to
+    // CONFIG to fix something that was never the problem.
+    return 'search proxy not reachable — ' + e.message;
+  }
+  return provider === 'ollama' ? 'search ON but no API key set — go to CONFIG' : null;
+}
+
 async function webSearch(query) {
   const apiKey = state.settings.apiKey;
-  if (!apiKey) {
-    console.warn('[search] No API key set in settings');
-    return null;
-  }
 
-  console.log(`[search] Starting search for: "${query}"`);
-  console.log(`[search] API key present: ${apiKey.slice(0, 6)}...`);
-
-  // Step 1: Check if proxy is reachable
+  // Step 1: Check the proxy is reachable, and learn which backend it relays to.
+  let provider;
   try {
-    const healthCheck = await fetch(SEARCH_PROXY_URL + '/health');
-    if (!healthCheck.ok) {
-      console.error(`[search] Proxy health check failed: HTTP ${healthCheck.status}`);
-      return null;
-    }
-    console.log('[search] Proxy is healthy');
+    provider = await getSearchProvider();
+    console.log(`[search] Proxy is healthy (provider: ${provider})`);
   } catch (e) {
     console.error('[search] Proxy unreachable at ' + SEARCH_PROXY_URL + ' — ' + e.message);
     console.error('[search] Make sure launch.bat is running (it starts the proxy)');
     return null;
   }
 
+  if (provider === 'ollama' && !apiKey) {
+    console.warn('[search] No API key set in settings (the ollama provider needs one)');
+    return null;
+  }
+
+  console.log(`[search] Starting search for: "${query}"`);
+  if (apiKey) console.log(`[search] API key present: ${apiKey.slice(0, 6)}...`);
+
   // Step 2: Send search request through proxy
   try {
     console.log('[search] Sending POST to proxy...');
+    const headers = { 'Content-Type': 'application/json' };
+    // Only send the key when there is one. `Bearer undefined` would be handed
+    // straight to whatever SEARCH_URL names.
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
     const resp = await fetch(SEARCH_PROXY_URL + '/web_search', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
+      headers,
       body: JSON.stringify({ query, max_results: 5 })
     });
 

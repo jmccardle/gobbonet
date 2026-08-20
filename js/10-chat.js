@@ -111,8 +111,13 @@ async function sendMessage(overrideContent) {
   // waste an API call (and confuse the proxy with prompt-shaped junk).
   const userMsg = thread.messages[thread.messages.length - 1];
   if (searchEnabled && !isProgrammatic) {
-    if (!state.settings.apiKey) {
-      renderSearchIndicator('search ON but no API key set — go to CONFIG');
+    // Not "is there a key" — "does this proxy's backend need one". A keyless
+    // SEARCH_URL backend does not, and gating on the key regardless is what
+    // sent users who had already configured one off to CONFIG for an Ollama
+    // account they do not need. See searchGateMessage() in js/11-search.js.
+    const gate = await searchGateMessage();
+    if (gate) {
+      renderSearchIndicator(gate);
     } else {
       renderSearchIndicator('searching...');
       console.log('[search] Search triggered, calling webSearch...');
@@ -704,7 +709,10 @@ async function regenerateFromThread(options = {}) {
 
   // Optional web search — used by scheduler
   // Results saved on the user message so they persist in context/lore
-  if (options.withSearch && state.settings.apiKey) {
+  // No key test here: webSearch() knows whether the active provider needs one,
+  // and this path has no indicator to explain a skip with. Requiring the key
+  // silently dropped search on regenerate for every keyless backend.
+  if (options.withSearch) {
     const lastUserMsg = [...thread.messages].reverse().find(m => m.role === 'user');
     if (lastUserMsg && !lastUserMsg.searchData) {
       const results = await webSearch(lastUserMsg.content);
