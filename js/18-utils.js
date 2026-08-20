@@ -149,7 +149,12 @@ function escapeJsAttr(str) {
 function safeDataUrl(value) {
   const s = String(value == null ? '' : value).trim();
   if (/^data:image\/(png|jpeg|jpg|gif|webp|bmp);base64,[A-Za-z0-9+/=\s]*$/i.test(s)) return s;
-  if (/^blob:/i.test(s)) return s;
+  // Anchored at both ends. An unanchored /^blob:/ returns the rest of the string
+  // untouched, so `blob:x" onerror="alert(1)` comes back out of a function named
+  // "safe" verbatim. The one caller today wraps the result in escapeHtml, which
+  // is what makes that harmless -- but the name promises a value safe to drop
+  // into src="..." on its own, and the next caller will believe it.
+  if (/^blob:[^"'\s<>]*$/i.test(s)) return s;
   return '';
 }
 
