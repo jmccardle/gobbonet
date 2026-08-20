@@ -306,6 +306,13 @@ exit /b 1
 :: Usage: call :prompt_yn "Question?" RESULT_VAR
 :: Sets RESULT_VAR to Y or N
 set "%~2=N"
+:: Clear the scratch variable before reading. 'set /p' leaves the variable at
+:: its PREVIOUS value when it reads nothing -- EOF, empty stdin, or any run
+:: with input redirected -- so without this the answer to the last question is
+:: silently reused as the answer to this one. That turns a confirmation prompt
+:: into one that answers itself with whatever the user said earlier. Fail
+:: closed on the N set above instead of inheriting the last answer.
+set "_YN="
 set /p "_YN=%~1 (Y/N): "
 if /i "!_YN!"=="Y" set "%~2=Y"
 if /i "!_YN!"=="YES" set "%~2=Y"
