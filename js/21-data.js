@@ -97,9 +97,19 @@ function importData(fileInput, type) {
       // Merge: add cards whose ID doesn't already exist
       const existingIds = new Set(state.characterCards.map(c => c.id));
       const newCards = data.characterCards.filter(c => !existingIds.has(c.id));
+      // This is the third door. exportData('cards') above serialises
+      // state.characterCards with customCodeEnabled intact, so the app itself
+      // emits files that carry the run flag, and the merge below would put one
+      // straight into state — activateCard() then calls applyCardCode() on the
+      // next click. The V2/V3 importer already strips it (16-card-io.js,
+      // applyImportedCardCode); the native cards export/import pair did not.
+      const neutralized = neutralizeUntrustedCode({ characterCards: newCards });
       state.characterCards = [...state.characterCards, ...newCards];
       saveState(); render();
-      showStatus(`✓ Imported ${newCards.length} character(s). ${data.characterCards.length - newCards.length} skipped (already exist).`, true);
+      const codeNote = neutralized.cards
+        ? ` ${neutralized.cards} carried custom code set to run — kept but switched OFF; review it before enabling.`
+        : '';
+      showStatus(`✓ Imported ${newCards.length} character(s). ${data.characterCards.length - newCards.length} skipped (already exist).${codeNote}`, true);
 
     } else if (type === 'personas') {
       if (!Array.isArray(data.personaCards)) { showStatus('✗ No personaCards array found.', false); return; }
