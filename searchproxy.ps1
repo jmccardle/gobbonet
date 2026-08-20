@@ -22,9 +22,12 @@
                            speaking {query,max_results} -> {results:[{title,url,content}]}.
                            Server-side so CORS does not apply: the browser could never call a
                            search engine directly, which is why this proxy exists at all.
-                           An unset SEARCH_URL is REPORTED (502 with a reason), never silently
-                           empty — "not configured" and "found nothing" must not look alike,
-                           which is the failure this whole file is written against.
+                           Every failure here is REPORTED (502 with a reason), never silently
+                           empty: an unset SEARCH_URL, a non-200 from the backend, a timeout,
+                           a refused connection. "Not configured", "broken" and "found
+                           nothing" must not look alike, which is the failure this whole file
+                           is written against — and the ollama path below has always behaved
+                           this way, so both providers now fail the same shape.
     ollama                 relay to https://ollama.com/api, forwarding the Authorization
                            header exactly as before. Unchanged, and still what you get when
                            no SEARCH_URL is configured.
@@ -130,7 +133,10 @@ function Get-HttpProviderResults {
         if ($Auth) { $headers['Authorization'] = $Auth }
         $r = Invoke-WebRequest -Uri $Url -Method POST -Body $payload -Headers $headers `
                                -UseBasicParsing -TimeoutSec 25
-        if ($r.StatusCode -ne 200) { return @() }
+        # Not 200 is not "no results". html.duckduckgo.com's bot interstitial is an
+        # HTTP 202 with an empty body — exactly the case that must be told apart from
+        # a genuinely empty answer, and returning @() here is what hid it.
+        if ($r.StatusCode -ne 200) { throw "backend returned HTTP $($r.StatusCode)" }
         $j = $r.Content | ConvertFrom-Json -ErrorAction Stop
         $out = @()
         foreach ($item in $j.results) {
@@ -153,9 +159,19 @@ function Get-HttpProviderResults {
         }
         return $out
     } catch {
-        # Search being down must never take chat down: webSearch() already reads null/empty as
-        # "nothing found" and carries on.
-        return @()
+        # Re-throw with the URL attached, so the outer catch answers 502 with a reason.
+        #
+        # This used to `return @()`. That made a configured-but-broken backend
+        # indistinguishable from a quiet web: SEARCH_URL pointing at a dead port, a
+        # timeout, a 500 — all of them rendered in the UI as "search returned no
+        # results", so nobody ever learned the backend was down. The ollama path a
+        # few lines below has always 502'd with the reason; this is the same
+        # treatment for the provider that replaced it.
+        #
+        # Search being down still does not take chat down: webSearch() reads a non-OK
+        # response as "no search this turn" and the message is sent anyway. The
+        # difference is that the reason now reaches the console instead of nowhere.
+        throw ("backend at " + $Url + ": " + $_.Exception.Message)
     }
 }
 
