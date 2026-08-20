@@ -603,13 +603,24 @@ if not defined PW_LINE (
 echo.
 echo   The file is one line, no trailing newline, in this exact form:
 echo.
-echo       salt:hash
+echo       pbkdf2-sha256:iterations:salt:hash
 echo.
-echo   salt = 32 lowercase hex characters, from 16 random bytes
-echo   hash = sha256 of salt+password, as 64 lowercase hex characters
+echo   iterations = the PBKDF2 round count setup used (210000)
+echo   salt       = 32 lowercase hex characters, from 16 random bytes
+echo   hash       = PBKDF2-HMAC-SHA256 of the password over that salt and
+echo                round count, 32 bytes as 64 lowercase hex characters
 echo.
-echo   The hash covers the salt and the password concatenated, in that
-echo   order, encoded UTF-8. Save the result as:
+echo   You do not have to compute that by hand. Anything that was there
+echo   has been renamed .bad, so running launch.bat again starts password
+echo   setup from scratch and writes the file correctly.
+echo.
+echo   The older form -- salt:hash, one SHA-256 of salt+password, UTF-8,
+echo   lowercase hex -- is still read so existing installs keep working.
+echo   Do not hand-write a new one: a single SHA-256 round over a short
+echo   password is seconds of GPU work if this file ever leaks, which is
+echo   the reason setup stopped producing that form.
+echo.
+echo   Whichever form, save the result as:
 echo       !SECRET_FILE!
 echo.
 echo   It must be plain ASCII with no byte-order mark. Writing it from
