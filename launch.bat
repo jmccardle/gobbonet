@@ -1,14 +1,30 @@
 @echo off
 :: ---------------------------------------------------------------
-:: KEEP-OPEN / LIFECYCLE GUARD
-:: Relaunch once in a dedicated cmd /c process. cmd /k leaves that
-:: shell alive at a prompt after the batch itself ends, so detached
-:: services have no reliable process lifetime to follow. cmd /c gives
-:: the launcher a real boundary that ends with the batch invocation.
+:: KEEP-OPEN / LIFECYCLE GUARD -- this window can NEVER silently
+:: vanish, and the launcher still has a lifetime worth watching.
+::
+:: We relaunch ourselves once inside "cmd /c". cmd /k used to hold
+:: the window open, but it does so by leaving that shell alive at a
+:: prompt after the batch ends, which gives the detached services no
+:: process lifetime to follow. cmd /c ends with the batch invocation,
+:: so runtime-watchdog.ps1 has a real boundary to wait on.
+::
+:: The outer shell shares this console and regains control when the
+:: inner cmd /c returns, so the pause below restores what cmd /k used
+:: to guarantee: if anything fails (a crash, a blocked tool, a bad
+:: path, even a stray syntax error that reaches no :fatal handler),
+:: the message stays on screen instead of the window closing too fast
+:: to read. ERRORLEVEL is tested before the flag is cleared, because
+:: SET can disturb it.
+::
+:: The env var is inherited by the relaunch, so this happens exactly
+:: once; clearing it afterwards leaves the console able to run
+:: launch.bat again.
 :: ---------------------------------------------------------------
 if not defined GOBBONET_KEEPOPEN (
     set "GOBBONET_KEEPOPEN=1"
     cmd /c ""%~f0" %*"
+    if errorlevel 1 pause
     set "GOBBONET_KEEPOPEN="
     exit /b
 )

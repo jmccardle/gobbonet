@@ -131,6 +131,19 @@ foreach ($p in @(Get-CimInstance Win32_Process)) {
 	$BaselineProcesses[[int]$p.ProcessId] = [string]$p.CreationDate
 }
 
+# A live Windows box always has processes -- this PowerShell among them --
+# so an empty baseline means the CIM query failed, not that nothing was
+# running. $ErrorActionPreference = 'SilentlyContinue' lets that failure
+# pass unnoticed, and Test-PreexistingProcess then answers $false for every
+# process: the guard that protects pre-existing services would protect
+# nothing, exactly when we can no longer tell what was here first. Decline
+# to clean up rather than clean up blind; leaked services are recoverable,
+# a wrongly killed Ollama is not.
+if ($BaselineProcesses.Count -eq 0) {
+	Log 'baseline process query returned nothing -- automatic cleanup disabled for this launch'
+	exit 1
+}
+
 function Test-PreexistingProcess($Process) {
 	$pidValue = [int]$Process.ProcessId
 	if (-not $BaselineProcesses.ContainsKey($pidValue)) { return $false }
