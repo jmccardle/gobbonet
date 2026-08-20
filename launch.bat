@@ -250,11 +250,18 @@ if not defined ACCESS_SECRET (
     exit /b 1
 )
 
-:: Ask the consumer's own question -- fileserver.ps1 tests this exact
-:: pattern at startup, so a pass here cannot become a failure there.
+:: Ask the consumer's own question -- fileserver.ps1 accepts these two
+:: shapes at startup, so a pass here cannot become a failure there.
+::
+:: BOTH must be listed. This check runs on every launch, including the one
+:: that just called :setup_password a few lines above. When it knew only
+:: the legacy shape it rejected the pbkdf2-sha256 line setup had written
+:: seconds earlier, on a fresh install, and the remedy it prints -- delete
+:: the file and run again -- wrote the same rejected line straight back.
+:: Keep this pattern identical to the one in :setup_password's readback.
 if not defined HAVE_PS goto :secret_shape_ok
 set "GN_PWCHECK=!ACCESS_SECRET!"
-powershell -NoProfile -Command "if ($env:GN_PWCHECK -match '^([0-9a-fA-F]+):([0-9a-fA-F]+)$') { exit 0 } else { exit 1 }" >nul 2>&1
+powershell -NoProfile -Command "if ($env:GN_PWCHECK -match '^pbkdf2-sha256:\d+:[0-9a-fA-F]+:[0-9a-fA-F]+$' -or $env:GN_PWCHECK -match '^[0-9a-fA-F]+:[0-9a-fA-F]+$') { exit 0 } else { exit 1 }" >nul 2>&1
 if errorlevel 1 goto :secret_shape_bad
 set "GN_PWCHECK="
 goto :secret_shape_ok
@@ -263,7 +270,8 @@ goto :secret_shape_ok
 set "GN_PWCHECK="
 echo.
 echo  [ERROR] .gobbonet-secret is malformed. Expected one line of
-echo          ^<hex^>:^<hex^> with no trailing newline.
+echo          pbkdf2-sha256:^<iters^>:^<hex^>:^<hex^>, or the legacy
+echo          ^<hex^>:^<hex^>, with no trailing newline.
 echo.
 echo          Fix: delete it and run launch.bat again to set a new one:
 echo             del "!SECRET_FILE!"
@@ -434,13 +442,30 @@ exit /b
 :setup_password
 :: First-run password setup. Reads the password WITHOUT echoing, confirms it,
 :: enforces a minimum length, then writes a PBKDF2-SHA256 hash to SECRET_FILE.
-:: PBKDF2 (210k iterations, the OWASP figure) rather than a single SHA-256
-:: round: the hash sits in a file on disk, and one round over a short password
-:: is seconds of GPU work if that file is ever read by anything else. The
-:: minimum is 10 characters because this password guards a service every
-:: device on the network can reach.
+:: PBKDF2 (210k iterations) rather than a single SHA-256 round: the hash sits
+:: in a file on disk, and one round over a short password is seconds of GPU
+:: work if that file is ever read by anything else. The minimum is 10
+:: characters because this password guards a service every device on the
+:: network can reach.
+::
+:: 210,000 is OWASP's figure for PBKDF2-HMAC-SHA512, not SHA-256; the cheat
+:: sheet's SHA-256 number is 600,000. The count here is a local choice, not
+:: that recommendation, and it is written into the secret alongside the hash,
+:: so raising it later costs nothing and invalidates nothing already stored.
 :: All of this happens inside PowerShell so the plaintext never lands in a
 :: batch variable, the environment, or the console.
+::
+:: The derivation is wrapped in try/catch with -ErrorAction Stop because the
+:: four-argument Rfc2898DeriveBytes(string, byte[], int, HashAlgorithmName)
+:: needs .NET Framework 4.7.2, and Windows PowerShell 5.1 on Windows 10 before
+:: 1803 or Server 2016 runs on 4.6.x, which has only the SHA-1 three-argument
+:: form. New-Object reports a missing overload as a NON-terminating error, so
+:: without both the guard and -ErrorAction Stop the script sailed on: $kdf
+:: stayed null, $kdf.GetBytes(32) failed as a statement-terminating error that
+:: does not stop a script, and Set-Content wrote
+:: "pbkdf2-sha256:210000:<salt>:" with no hash at all -- followed by "[OK]
+:: Password set." in green. Silent success is the one outcome a password
+:: setup routine must never produce.
 ::
 :: We write the PowerShell to a temp .ps1 and run it with -File rather than
 :: cramming it into -Command with caret line-continuations. The -File form is
@@ -482,9 +507,20 @@ echo     if ^($t1 -ne $t2^) { Write-Host '  Passwords did not match -- try again
 echo     $saltBytes = New-Object byte[] 16
 echo     [Security.Cryptography.RandomNumberGenerator]::Create^(^).GetBytes^($saltBytes^)
 echo     $salt = ^([BitConverter]::ToString^($saltBytes^) -replace '-'^).ToLower^(^)
-echo     $kdf = New-Object System.Security.Cryptography.Rfc2898DeriveBytes^($t1, $saltBytes, $iters, [System.Security.Cryptography.HashAlgorithmName]::SHA256^)
-echo     $hash = ^([BitConverter]::ToString^($kdf.GetBytes^(32^)^) -replace '-'^).ToLower^(^)
-echo     $kdf.Dispose^(^)
+echo     try {
+echo         $kdf = New-Object System.Security.Cryptography.Rfc2898DeriveBytes^($t1, $saltBytes, $iters, [System.Security.Cryptography.HashAlgorithmName]::SHA256^) -ErrorAction Stop
+echo         if ^($null -eq $kdf^) { throw 'Rfc2898DeriveBytes could not be constructed.' }
+echo         $hash = ^([BitConverter]::ToString^($kdf.GetBytes^(32^)^) -replace '-'^).ToLower^(^)
+echo         $kdf.Dispose^(^)
+echo     } catch {
+echo         Write-Host '  [ERROR] Could not derive the password hash. NOTHING was saved.' -Foreground Red
+echo         Write-Host ^('          ' + $_.Exception.Message^) -Foreground Red
+echo         Write-Host '          This needs .NET Framework 4.7.2 or newer. Windows 10' -Foreground Red
+echo         Write-Host '          before 1803 and Server 2016 ship 4.6.x, where this' -Foreground Red
+echo         Write-Host '          constructor does not exist. Install .NET Framework 4.8' -Foreground Red
+echo         Write-Host '          and run launch.bat again.' -Foreground Red
+echo         exit 1
+echo     }
 echo     Set-Content -Path $env:GOBBONET_SECRET_OUT -Value ^('pbkdf2-sha256:' + $iters + ':' + $salt + ':' + $hash^) -Encoding ascii -NoNewline
 echo     Write-Host '  [OK] Password set.' -Foreground Green
 echo     break
@@ -567,13 +603,24 @@ if not defined PW_LINE (
 echo.
 echo   The file is one line, no trailing newline, in this exact form:
 echo.
-echo       salt:hash
+echo       pbkdf2-sha256:iterations:salt:hash
 echo.
-echo   salt = 32 lowercase hex characters, from 16 random bytes
-echo   hash = sha256 of salt+password, as 64 lowercase hex characters
+echo   iterations = the PBKDF2 round count setup used (210000)
+echo   salt       = 32 lowercase hex characters, from 16 random bytes
+echo   hash       = PBKDF2-HMAC-SHA256 of the password over that salt and
+echo                round count, 32 bytes as 64 lowercase hex characters
 echo.
-echo   The hash covers the salt and the password concatenated, in that
-echo   order, encoded UTF-8. Save the result as:
+echo   You do not have to compute that by hand. Anything that was there
+echo   has been renamed .bad, so running launch.bat again starts password
+echo   setup from scratch and writes the file correctly.
+echo.
+echo   The older form -- salt:hash, one SHA-256 of salt+password, UTF-8,
+echo   lowercase hex -- is still read so existing installs keep working.
+echo   Do not hand-write a new one: a single SHA-256 round over a short
+echo   password is seconds of GPU work if this file ever leaks, which is
+echo   the reason setup stopped producing that form.
+echo.
+echo   Whichever form, save the result as:
 echo       !SECRET_FILE!
 echo.
 echo   It must be plain ASCII with no byte-order mark. Writing it from
