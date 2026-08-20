@@ -64,6 +64,11 @@ function renderLandingPage() {
     presetHtml = `<div class="landing-empty">No default characters loaded — add entries to default-characters.json.</div>`;
   } else {
     presetHtml = defaultCharacters.map((p, i) => {
+      // NOT escaped, unlike name/desc below. default-characters.json ships beside
+      // this file and is loaded from the same origin, so it is the same trust level
+      // as the JS -- an attacker who can edit it can edit 13-dashboard.js. And its
+      // icons are authored AS numeric entities ("&#128126;"), so escaping turns the
+      // whole preset row on the landing page into literal "&#128126;" text.
       const icon = p.icon || '&#9864;';
       const name = escapeHtml(p.name || 'Unnamed');
       const desc = escapeHtml((p.desc || '').slice(0, 80));
@@ -78,7 +83,7 @@ function renderLandingPage() {
         : `title="${name}"`;
       return `
         <div class="landing-preset-card ${hasCardData ? 'landing-preset-installable' : ''}" ${clickAttr}>
-          <div class="landing-preset-icon">${escapeHtml(icon)}</div>
+          <div class="landing-preset-icon">${icon}</div>
           <div class="landing-char-info">
             <div class="landing-char-name">${name}</div>
             <div class="landing-char-desc">${desc}</div>
