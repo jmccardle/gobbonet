@@ -442,11 +442,16 @@ exit /b
 :setup_password
 :: First-run password setup. Reads the password WITHOUT echoing, confirms it,
 :: enforces a minimum length, then writes a PBKDF2-SHA256 hash to SECRET_FILE.
-:: PBKDF2 (210k iterations, the OWASP figure) rather than a single SHA-256
-:: round: the hash sits in a file on disk, and one round over a short password
-:: is seconds of GPU work if that file is ever read by anything else. The
-:: minimum is 10 characters because this password guards a service every
-:: device on the network can reach.
+:: PBKDF2 (210k iterations) rather than a single SHA-256 round: the hash sits
+:: in a file on disk, and one round over a short password is seconds of GPU
+:: work if that file is ever read by anything else. The minimum is 10
+:: characters because this password guards a service every device on the
+:: network can reach.
+::
+:: 210,000 is OWASP's figure for PBKDF2-HMAC-SHA512, not SHA-256; the cheat
+:: sheet's SHA-256 number is 600,000. The count here is a local choice, not
+:: that recommendation, and it is written into the secret alongside the hash,
+:: so raising it later costs nothing and invalidates nothing already stored.
 :: All of this happens inside PowerShell so the plaintext never lands in a
 :: batch variable, the environment, or the console.
 ::
