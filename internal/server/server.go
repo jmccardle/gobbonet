@@ -7,6 +7,8 @@
 //	/favicon.ico               unauthenticated (so the login tab isn't ugly)
 //	-------------------------- auth gate --------------------------
 //	/health-fileserver         liveness, plus what this server is capable of
+//	/openapi.json              this server's API, as OpenAPI
+//	/docs, /docs/*             Swagger UI over that document
 //	/active-model.json         model identity for the UI
 //	/models-list.json          the header dropdown
 //	/state, /state/*           cross-device state sync
@@ -30,6 +32,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmccardle/gobbonet/internal/apidocs"
 	"github.com/jmccardle/gobbonet/internal/auth"
 	"github.com/jmccardle/gobbonet/internal/config"
 	"github.com/jmccardle/gobbonet/internal/httpx"
@@ -188,6 +191,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case path == "/health-fileserver":
 		s.handleHealth(w, r)
+
+	// Behind the gate with everything else. The surface is not a secret — the
+	// frontend's own JS calls most of it — but there is no reason for this one
+	// route to be the exception, and being inside means Swagger UI's "try it
+	// out" already holds the session it needs.
+	case path == "/openapi.json" || path == "/docs" || strings.HasPrefix(path, "/docs/"):
+		apidocs.Handle(w, r)
 
 	case path == "/active-model.json":
 		// The live context size, not cfg's: a /perf change that has been applied

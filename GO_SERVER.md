@@ -363,6 +363,53 @@ reparented to init, disappears from any walk of our own descendants, and keeps
 holding GPU memory. The next model then fails to allocate a backend buffer, and
 nothing in that error points at the real cause.
 
+## API documentation
+
+Two routes, behind the password gate like everything they describe:
+
+| Route | What it is |
+|---|---|
+| `/openapi.json` | An OpenAPI 3.0.3 description of every route this server answers. |
+| `/docs` | Swagger UI, rendering that document. |
+
+Both are compiled into the binary. Swagger UI is vendored rather than loaded
+from a CDN, because this app normally runs with no internet and a blank docs
+page is the last thing you want while debugging a machine that is offline. That
+costs about 1.2 MB of binary. Provenance, version and licence are in
+`internal/apidocs/swagger-ui/VENDOR.md`.
+
+"Try it out" works from a logged-in browser with no extra setup — the request
+carries the same session cookie the page did. For scripted access, send the
+session token as `X-Gobbonet-Token` instead.
+
+`info.version` is substituted at load time from the same build stamp
+`/health-fileserver` reports, so the document always names the binary serving
+it rather than whatever number was last typed into the file.
+
+`fileserver.ps1` has neither route. They are additions in the Go build, and no
+existing client reads them.
+
+### Keeping it true
+
+The document is written by hand, in `internal/apidocs/openapi.json`. A
+hand-written spec rots silently, so `internal/server/openapi_conformance_test.go`
+checks it from both ends:
+
+- every path literal `ServeHTTP` matches on — read out of its syntax tree, not a
+  list kept by hand — is accounted for in the document;
+- every path in the document reaches a handler rather than falling through to
+  the static file server;
+- every `$ref` resolves.
+
+Adding a route therefore fails the tests until you name it in `openapi.json` and
+in that file's `routeDocs` table. That is the point: the table is where you are
+made to notice.
+
+The three proxy prefixes are described as proxies. Only the handful of upstream
+operations GobboNet or `chat.html` actually call are written out; the rest is one
+passthrough entry each. Copying llama.cpp's API in here would produce a copy that
+goes stale with nobody watching.
+
 ## Tests
 
 ```sh
@@ -384,6 +431,7 @@ cmd/gobbonet/          CLI entry point
 internal/config/       TOML config, discovery, mode detection, get/set,
                        the perf.toml tuning overlay
 internal/auth/         sessions, Argon2id + legacy migration, rate limit
+internal/apidocs/      the OpenAPI document and the Swagger UI page
 internal/server/       routing, auth gate, health endpoint, /perf
 internal/state/        /state and /state/info
 internal/models/       GGUF parsing, classifier, model metadata endpoints
