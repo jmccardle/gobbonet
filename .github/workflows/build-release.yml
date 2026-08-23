@@ -1,0 +1,62 @@
+# Automated builds for the Go port — your build-release.sh, run by the machine.
+#
+# The script already does the careful part (VERSION + short-sha stamping,
+# clean-tree refusal, per-platform bundles into dist/). This just runs it on
+# every push so a broken build is caught in minutes, and publishes the bundles
+# to a GitHub release whenever a tag is pushed — no more hand-built drafts
+# lagging behind the branch.
+#
+#   git tag 1.7-go-$(git rev-parse --short HEAD) && git push --tags
+#
+# ...and the release appears with every platform's bundle attached.
+name: Build and release
+
+on:
+  push:
+    branches: [go_go_gobbonet]
+    tags: ['*-go-*']
+  pull_request:
+    branches: [go_go_gobbonet]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build every platform with the repo's own script
+        run: ./build-release.sh
+      - name: Keep the bundles for the release job (and for PR reviewers)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 14
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Publish the bundles
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          cd dist
+          sha256sum * > SHA256SUMS 2>/dev/null || true
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "GobboNet Go ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            *
