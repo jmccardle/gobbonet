@@ -203,6 +203,13 @@ func cmdServe(argv []string) error {
 
 	var sup *supervisor.Supervisor
 	if mode == config.ModeLocal {
+		// Before anything is spawned: a child inherits job membership at creation,
+		// so the guard has to already be in place to cover it.
+		if err := supervisor.EnsureChildrenDieWithUs(); err != nil {
+			fmt.Printf(" [!]  crash-safe cleanup of llama-server is unavailable: %v\n", err)
+			fmt.Println("      Shutting down normally still stops it. Ending this process any other way")
+			fmt.Println("      will leave llama-server holding the port and the VRAM; stop it by hand.")
+		}
 		sup, err = supervisor.New(supervisor.Options{
 			ServerExe: cfg.ServerExe,
 			ModelDir:  cfg.ModelDir,
