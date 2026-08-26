@@ -126,9 +126,10 @@ type Config struct {
 	DataDir  string `toml:"data_dir"`
 
 	// --- Access control ----------------------------------------------------
-	// AccessSecret is either a legacy "salt:hash" SHA-256 pair or an Argon2id
-	// PHC string. See internal/auth: a legacy secret is verified as-is and
-	// rewritten as Argon2id on the next successful login.
+	// AccessSecret is an Argon2id PHC string, a "pbkdf2-sha256:..." secret from
+	// launch.bat, or a legacy "salt:hash" SHA-256 pair. See internal/auth: a
+	// legacy secret is verified as-is and rewritten as Argon2id on the next
+	// successful login; the other two are left alone.
 	AccessSecret string `toml:"access_secret"`
 
 	// --- Chat template overrides -------------------------------------------

@@ -50,10 +50,18 @@ const passwordIntro = `
 
   It is stored only as an Argon2id hash -- not as
   plain text -- and never leaves this machine.
+
+  Use at least 10 characters, and not one you use
+  anywhere else: it crosses the LAN unencrypted.
  ====================================================
 `
 
-const minPasswordLength = 6
+// Ten, matching upstream launch.bat's :setup_password. A KDF only buys time
+// against an offline attack; six characters is inside what a GPU covers
+// exhaustively however the hash is computed, and this password guards a service
+// every device on the network can reach over plaintext HTTP. Existing passwords
+// are unaffected -- this is checked when one is set, not when one is used.
+const minPasswordLength = 10
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {

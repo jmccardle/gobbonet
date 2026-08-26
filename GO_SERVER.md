@@ -225,6 +225,12 @@ work, not folded into a release.
 a Windows install still verifies and is **rewritten as Argon2id on the next
 successful login** — users migrate by logging in once, with no forced reset.
 
+A `pbkdf2-sha256:<iterations>:<salt-hex>:<hash-hex>` secret — what upstream
+`launch.bat` writes since ElodineOfficial/gobbonet#6 — also verifies, and is
+*not* rewritten. It is already a real KDF, and the launcher re-supplies it
+through `GEMMA_ACCESS_SECRET` on every start, where the environment wins over
+the file: an upgrade would be rewritten on every login and never take.
+
 `POST /login` is rate limited per source IP (burst of 10, refilling one every six
 seconds). Constant-time comparison stops an attacker learning the password a byte
 at a time; it does nothing about simply trying a lot of passwords.
