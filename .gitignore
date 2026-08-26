@@ -61,6 +61,11 @@ hardware.ini
 # toolchain, and a non-Go directory there breaks `go build`.
 /installer/vendor/
 
+# compose.yaml reads this for the model path and the engine image. It describes
+# one machine's hardware and directory layout, like hardware.ini above.
+# .env.example IS committed -- it is the documentation of what goes in here.
+/.env
+
 # Runtime state written next to the config on a portable install
 /config.toml
 /models/

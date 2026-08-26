@@ -1,0 +1,271 @@
+# Auto-start the whole stack: llama.cpp in one container, the Go server in
+# another, on a private network.
+#
+#   docker compose up -d          # or: podman-compose up -d
+#
+# The Containerfile deliberately does not bundle an engine (see the comment at
+# the top of it). This file is the other half of that decision: llama.cpp stays
+# its own process, upstream ships an image of it, and the two are wired together
+# here instead of welded together in one image.
+#
+# --- Which llama.cpp image -----------------------------------------------
+#
+# Upstream publishes them at ghcr.io/ggml-org/llama.cpp. The `server-*` tags run
+# llama-server directly (ENTRYPOINT /app/llama-server), which is what we want;
+# `full-*` adds the conversion and quantisation tools, `light-*` is the CLI.
+#
+#   server            CPU only            ~307 MB   amd64, arm64, s390x
+#   server-cuda       NVIDIA, CUDA 12.8  ~2.6 GB   amd64, arm64
+#   server-cuda12     NVIDIA, pinned to the CUDA 12 line
+#   server-cuda13     NVIDIA, pinned to the CUDA 13 line
+#   server-rocm       AMD, ROCm
+#   server-vulkan     AMD/Intel/anything with a Vulkan driver
+#   server-intel      Intel GPU (SYCL)
+#   server-musa       Moore Threads
+#   server-openvino   Intel CPU/GPU/NPU via OpenVINO
+#
+# Each also exists pinned to a build number -- server-cuda-b9010 and so on.
+# The moving tags above are rebuilt continuously; pin one if you want the engine
+# to stop changing under you, which is the usual reason a model that worked last
+# week doesn't today.
+#
+# Set LLAMA_IMAGE in .env to pick. It stays on CPU unless you say otherwise,
+# because a GPU tag also needs devices passed in, and those differ per vendor
+# AND per container engine -- see the commented blocks in the llama service.
+#
+# --- First run ------------------------------------------------------------
+#
+# Copy .env.example to .env and fill in MODEL_DIR and MODEL_FILE first. Then:
+#
+#   # 1. Bootstrap the config file. The first of these two exits 1 saying it
+#   #    wrote a commented config.toml into the volume; that is the designed
+#   #    first-run behaviour, not a failure. The second one sets the password.
+#   docker compose run --rm gobbonet set-password
+#   docker compose run --rm gobbonet set-password
+#
+#   # 2. Start everything.
+#   docker compose up -d
+#
+# There is no way around the interactive step: the server refuses to start
+# without a password rather than quietly serving your chat to the whole LAN, and
+# there is nobody to prompt inside a detached container. `compose run` gives it
+# the terminal it asks for.
+#
+# --- Auto-start at boot ---------------------------------------------------
+#
+# `restart: unless-stopped` is honoured by the docker daemon at boot on its own.
+# Rootless podman has no daemon, so it needs one of:
+#
+#   systemctl --user enable --now podman-restart.service
+#   loginctl enable-linger $USER        # so it starts before you log in
+#
+# or a quadlet unit per container in ~/.config/containers/systemd/, which is the
+# better answer if this is a machine that should come back up unattended.
+
+name: gobbonet
+
+services:
+  llama:
+    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
+    restart: unless-stopped
+
+    # Read-only: this container runs the model, it has no business writing to
+    # the directory the models live in.
+    volumes:
+      - ${MODEL_DIR:?set MODEL_DIR in .env to the directory holding your .gguf files}:/models:ro
+
+    # These mirror internal/supervisor/supervisor.go's argv, which is how this
+    # app launches llama-server when it supervises the process itself. Keeping
+    # them the same means local mode and this stack behave identically:
+    #
+    #   --parallel 1        one slot. The job manager caps concurrency at 1 and
+    #                       supersedes past it; more slots buy a queue nothing
+    #                       serves.
+    #   --jinja             honour the template embedded in the GGUF.
+    #   --reasoning-format  auto -- the only flag here with no LLAMA_ARG_*
+    #                       equivalent, hence the whole launch line lives in
+    #                       command: rather than half of it in environment:.
+    #
+    # --port is explicit, and 11437 is this app's number for llama.cpp. Taking
+    # llama-server's default instead would mean inheriting a moving target:
+    # current builds log "server default port will be changed to :9931 in a
+    # future release" on every start, and that number is baked into the image's
+    # own healthcheck. Pinning the port and overriding the healthcheck below
+    # leaves nothing to change under us.
+    command:
+      - --port
+      - "11437"
+      - --model
+      - /models/${MODEL_FILE:?set MODEL_FILE in .env to a .gguf filename inside MODEL_DIR}
+      - --ctx-size
+      - ${CTX_SIZE:-16384}
+      - --n-gpu-layers
+      - ${GPU_LAYERS:-0}
+      - --cache-type-k
+      - ${KV_CACHE_TYPE:-q8_0}
+      - --cache-type-v
+      - ${KV_CACHE_TYPE:-q8_0}
+      - --parallel
+      - "1"
+      - --jinja
+      - --reasoning-format
+      - auto
+
+    # Replaces the image's own check, which is pinned to the default port we
+    # just moved off. start_period is the part that matters: a large model can
+    # take minutes to load, and without it the container reports unhealthy the
+    # whole time it is doing exactly what it should be.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:11437/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: ${MODEL_LOAD_TIMEOUT:-180s}
+
+    # Not published by default. llama-server has no auth of its own, so a port
+    # mapping here hands anyone on the LAN an unauthenticated LLM -- while the
+    # chat in front of it is asking them for a password. Uncomment for a local
+    # `curl` against the engine; the loopback bind is the point of it.
+    # ports:
+    #   - "127.0.0.1:11437:11437"
+
+    # --- GPU passthrough ---------------------------------------------------
+    #
+    # NVIDIA, podman (needs nvidia-container-toolkit and `nvidia-ctk cdi
+    # generate`):
+    # devices:
+    #   - nvidia.com/gpu=all
+    #
+    # NVIDIA, docker compose:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    #
+    # AMD (server-rocm or server-vulkan), both engines:
+    # devices:
+    #   - /dev/kfd
+    #   - /dev/dri
+    # group_add:
+    #   - video
+    #
+    # Whichever you pick, set GPU_LAYERS in .env as well -- passing the device
+    # through without asking for offload just runs on the CPU next to an idle
+    # GPU.
+
+  # Embeddings for RAG semantic retrieval. Opt-in: `docker compose --profile rag
+  # up -d`. Without it the chat works normally and retrieval falls back to
+  # weighted tags -- /embed answers 502, the client notices, and RAG_INFO.md
+  # describes exactly that degradation.
+  embed:
+    profiles: [rag]
+    image: ${LLAMA_IMAGE_EMBED:-ghcr.io/ggml-org/llama.cpp:server}
+    restart: unless-stopped
+
+    # Fetched by the engine on first start into a named volume, rather than
+    # asking you to go find a 146 MB file by hand. This is the same model and
+    # the same URL launch.bat downloads on Windows.
+    environment:
+      LLAMA_CACHE: /cache
+    volumes:
+      - embed-cache:/cache
+      # To use a local copy instead, drop the --hf-* flags below for
+      # `--model /models/nomic-embed-text-v1.5.Q8_0.gguf` and mount:
+      # - ${MODEL_DIR}:/models:ro
+
+    # --pooling mean is required by nomic/e5-style embedders; without it
+    # retrieval quality quietly drops. --batch-size/--ubatch-size are raised to
+    # the full context because a non-causal embedder has to fit the whole input
+    # in one ubatch -- at the default 512 anything longer 400s, and the only
+    # symptom is a long document that never matches. Both numbers come from
+    # launch.bat, which learned them the hard way.
+    #
+    # No GPU offload on purpose: embeddings are cheap on CPU and this must not
+    # take VRAM from the chat model.
+    command:
+      - --port
+      - "11436"
+      - --hf-repo
+      - nomic-ai/nomic-embed-text-v1.5-GGUF
+      - --hf-file
+      - nomic-embed-text-v1.5.Q8_0.gguf
+      - --embeddings
+      - --pooling
+      - mean
+      - --ctx-size
+      - "2048"
+      - --batch-size
+      - "2048"
+      - --ubatch-size
+      - "2048"
+      - --n-gpu-layers
+      - "0"
+
+    # Same reasoning as the chat engine's, minus the long start_period: the
+    # first start downloads 146 MB, every start after it loads a small model
+    # from the cache volume.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:11436/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+
+  gobbonet:
+    build:
+      context: .
+      dockerfile: Containerfile
+      args:
+        # Stamped the same way build-release.sh stamps it. Compose has no way to
+        # run `git rev-parse`, so this reads whatever is in the environment and
+        # otherwise leaves the binary reporting "dev" -- which is the honest
+        # answer for a build nobody named. To stamp it:
+        #
+        #   GOBBONET_VERSION="$(cat VERSION)-go-$(git rev-parse --short HEAD)" \
+        #       docker compose build gobbonet
+        GOBBONET_VERSION: ${GOBBONET_VERSION:-}
+    image: gobbonet:local
+    restart: unless-stopped
+
+    # Ordering only. Deliberately not `condition: service_healthy`: a large
+    # model can take a minute to load, and the server already reports an
+    # upstream that isn't answering yet -- in the startup banner, in
+    # /health-fileserver, and in the UI. Holding the chat screen hostage to the
+    # model file would replace a visible "not ready" with a blank page.
+    depends_on:
+      - llama
+
+    environment:
+      # The env spelling of llm_url and embed_url. These override config.toml,
+      # which is what keeps the service names in this file instead of duplicated
+      # into a volume you'd have to edit to rename a service.
+      #
+      # Same ports config.toml defaults to, just a service name instead of
+      # 127.0.0.1. Note that `gobbonet config get llm_url` will still report the
+      # file's value, not this one -- the getter reports the file the setter
+      # writes, on purpose.
+      GOBBONET_LLM_URL: http://llama:11437
+      GOBBONET_EMBED_URL: http://embed:11436
+
+    # Config and data are separate volumes for the same reason they are separate
+    # directories on disk: config.toml and the password hash in one, state
+    # backup and logs in the other, and nothing large beside the config.
+    volumes:
+      - config:/config
+      - data:/data
+
+    # The one port that is meant to be reachable: this is the chat screen, and
+    # it is password-gated. If you reach it by a DNS name rather than an IP,
+    # add that name to allowed_hosts in config.toml -- the Host-header check
+    # refuses unknown names so a rebinding attack can't reach a server bound to
+    # 0.0.0.0.
+    ports:
+      - "${LISTEN_PORT:-9066}:9066"
+
+volumes:
+  config:
+  data:
+  embed-cache:
