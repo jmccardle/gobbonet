@@ -68,3 +68,8 @@ hardware.ini
 /state.json
 /.gobbonet-secret
 /perf.toml
+
+# Engine builds, the test GGUF, and the servers the contract suite starts.
+# Fetched by .github/scripts/, cached by CI, never committed -- a llama.cpp
+# release archive is 14-32 MB and the model is 105 MB.
+/.ci/
