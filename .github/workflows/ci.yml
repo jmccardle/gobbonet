@@ -1,0 +1,87 @@
+# Everything that needs no engine and no network beyond the module cache.
+#
+# Runs on every push and pull request, on GitHub's standard runners, free for a
+# public repository. The contract suite that talks to a real llama.cpp lives in
+# contracts.yml.
+name: ci
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # All three, because internal/supervisor is the one place with per-OS code
+    # (process_unix.go / process_windows.go) and config discovery differs
+    # between the XDG layout and the Windows one.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # version_test.go compares VERSION against the nearest upstream
+          # release tag. Without full history AND tags it does not fail -- it
+          # SKIPS, naming what it could not verify, which reads as green.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          unformatted="$(gofmt -l ./cmd ./internal)"
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt'd:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+      # Separate step, ubuntu only: -race roughly triples the runtime, and the
+      # concurrency it checks (the jobs manager's supersede/cancel path, the
+      # supervisor's swap lock) is not OS-specific.
+      - name: go test -race
+        if: matrix.os == 'ubuntu-latest'
+        run: go test -race ./...
+
+  build:
+    # The five targets build-release.sh ships. Cross-compiling costs seconds
+    # with CGO off and catches a darwin- or windows-only compile error without
+    # waiting for the matrix above.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: cross-compile
+        run: |
+          for target in linux/amd64 linux/arm64 windows/amd64 darwin/arm64 darwin/amd64; do
+            echo "== $target"
+            CGO_ENABLED=0 GOOS="${target%/*}" GOARCH="${target#*/}" \
+              go build -trimpath -o /dev/null ./cmd/gobbonet
+          done
+
+  web:
+    # stage-web.sh refuses to assemble a web root that would load a partial
+    # frontend: it counts the js/ and css/ files chat.html actually asks for.
+    # That check is the tripwire for an upstream merge landing 39 of 40 files.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./stage-web.sh

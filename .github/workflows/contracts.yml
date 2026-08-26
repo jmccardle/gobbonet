@@ -1,0 +1,133 @@
+# Does gobbonet still fit llama.cpp?
+#
+# The grid is two cells wide -- who owns the llama-server process -- and two
+# deep: the build we pin, and the build upstream shipped this morning. There is
+# no backend axis. gobbonet never sees CUDA or Metal; it sees an HTTP API and a
+# command line, and those are identical across backends. CI_TESTING.md has the
+# reasoning and the full contract inventory.
+#
+# All of it runs on CPU, on GitHub's standard runners, free for a public repo.
+name: contracts
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  schedule:
+    # Nightly canary against whatever upstream shipped. Not on the hour: the
+    # top of the hour is when GitHub's scheduler is most congested.
+    - cron: '37 5 * * *'
+  workflow_dispatch:
+    inputs:
+      llama_tag:
+        description: 'llama.cpp build (bNNNN, or "master" for the newest)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  pinned:
+    # The build launch.bat actually ships. This is the one that gates a merge:
+    # if it fails, the tree no longer works with the engine users have.
+    name: ${{ matrix.mode }} / pinned / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        mode: [local]
+        include:
+          # Remote mode is an HTTP client -- no process handling, so no reason
+          # to pay for it three times. Linux is enough.
+          - os: ubuntu-latest
+            mode: remote
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: resolve the pin
+        id: pin
+        shell: bash
+        run: echo "tag=$(.github/scripts/llama-pin.sh)" >> "$GITHUB_OUTPUT"
+
+      # Keyed on the pin, so bumping launch.bat's LLAMA_PIN_TAG invalidates the
+      # cache by itself rather than testing yesterday's engine forever.
+      - name: cache engine and model
+        uses: actions/cache@v4
+        with:
+          path: .ci
+          key: contracts-${{ runner.os }}-${{ steps.pin.outputs.tag }}-smollm2-135m
+
+      - name: contracts
+        shell: bash
+        run: .github/scripts/run-contracts.sh --mode ${{ matrix.mode }}
+
+      - name: logs
+        if: failure()
+        shell: bash
+        run: tail -n 200 .ci/run/${{ matrix.mode }}/*.log || true
+
+  canary:
+    # The newest upstream build. Informational: it is telling you about someone
+    # else's commit, so it must never gate a merge -- but a red canary is a
+    # week of warning before the same break reaches a user who updated their
+    # engine.
+    #
+    # Scheduled and manual only. A canary on every PR would spend the tree's
+    # credibility on upstream's release cadence.
+    name: canary / newest llama.cpp
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [local, remote]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: contracts against ${{ inputs.llama_tag || 'master' }}
+        shell: bash
+        run: |
+          .github/scripts/run-contracts.sh \
+            --mode ${{ matrix.mode }} \
+            --llama "${{ inputs.llama_tag || 'master' }}"
+
+      - name: logs
+        if: failure()
+        shell: bash
+        run: tail -n 200 .ci/run/${{ matrix.mode }}/*.log || true
+
+  installer-asset:
+    # launch.bat pins a build AND that build's SHA-256, then downloads it on a
+    # user's machine. Both halves rot silently: an asset can be re-cut or
+    # dropped, and the first person to find out is someone installing.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: the pinned Windows asset is still downloadable and unchanged
+        shell: bash
+        run: |
+          tag="$(.github/scripts/llama-pin.sh)"
+          want="$(.github/scripts/llama-pin.sh --sha)"
+          asset="llama-$tag-bin-win-vulkan-x64.zip"
+          url="https://github.com/ggml-org/llama.cpp/releases/download/$tag/$asset"
+          echo "checking $url"
+          curl -fsSL --retry 3 --retry-all-errors -o "$asset" "$url"
+          got="$(sha256sum "$asset" | cut -d' ' -f1)"
+          if [ "$got" != "$want" ]; then
+            echo "SHA-256 mismatch for $asset"
+            echo "  launch.bat expects $want"
+            echo "  the download is    $got"
+            exit 1
+          fi
+          echo "ok: $asset matches the pin"
