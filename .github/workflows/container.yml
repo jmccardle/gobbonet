@@ -1,0 +1,94 @@
+# The image and the compose stack are shipped artifacts, so a broken
+# Containerfile is as user-facing as a broken binary.
+#
+# Kept separate from ci.yml rather than folded in as another job: this workflow
+# and the files it checks arrive together, and neither half is much use without
+# the other.
+name: container
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'Containerfile'
+      - '.containerignore'
+      - 'compose.yaml'
+      - '.github/workflows/container.yml'
+      # The image bundles the binary and the staged web root, so a change to
+      # either can break the build without touching a container file.
+      - 'cmd/**'
+      - 'internal/**'
+      - 'js/**'
+      - 'css/**'
+      - 'chat.html'
+      - 'stage-web.sh'
+      - 'go.mod'
+      - 'go.sum'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The build stamps VERSION-go-<sha>, so it needs the sha.
+          fetch-depth: 0
+
+      - name: build
+        run: |
+          docker build -t gobbonet:ci \
+            --build-arg GOBBONET_VERSION="$(cat VERSION)-go-$(git rev-parse --short HEAD)" .
+
+      - name: the version is stamped
+        run: |
+          got="$(docker run --rm gobbonet:ci version)"
+          echo "$got"
+          case "$got" in
+            *"$(cat VERSION)-go-"*) ;;
+            *) echo "image reports '$got', which does not carry the VERSION stamp"; exit 1 ;;
+          esac
+
+      - name: first run writes a config and stops
+        run: |
+          # The designed first-run behaviour, and the one a container makes easy
+          # to get wrong: exit non-zero naming the file it wrote, rather than a
+          # server running on defaults whose llm_url points at the container
+          # itself.
+          docker volume create ci-config
+          if docker run --rm -v ci-config:/config gobbonet:ci; then
+            echo "expected a non-zero exit on first run"; exit 1
+          fi
+          docker run --rm -v ci-config:/config gobbonet:ci config get llm_url
+
+      - name: the web root is served
+        run: |
+          # /favicon.ico is the only unauthenticated route, so it is the only
+          # one that answers 200 to a probe holding no session -- and it is
+          # derived by stage-web.sh, so a 200 also proves the staging step ran
+          # inside the build.
+          docker run -d --name gobbonet-ci -p 19066:9066 \
+            -v ci-config:/config gobbonet:ci serve --no-auth
+          for i in $(seq 1 30); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:19066/favicon.ico || true)"
+            [ "$code" = "200" ] && break
+            sleep 1
+          done
+          [ "$code" = "200" ] || { docker logs gobbonet-ci; echo "favicon: $code"; exit 1; }
+          curl -sf -o /dev/null http://127.0.0.1:19066/ || { echo "chat.html not served"; exit 1; }
+          docker rm -f gobbonet-ci
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: the compose file parses, rag profile included
+        run: |
+          # Placeholder values: this checks the file's shape, not that a model
+          # exists. MODEL_DIR and MODEL_FILE are deliberately required, so
+          # something has to be supplied here.
+          MODEL_DIR=/tmp MODEL_FILE=x.gguf docker compose --profile rag config -q
