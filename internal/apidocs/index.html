@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GobboNet API</title>
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/docs/swagger-ui.css">
+<style>
+  body { margin: 0; background: #fafafa; }
+  /* The topbar belongs to the standalone preset, which is not bundled — but
+     Swagger UI still reserves space for it. */
+  .swagger-ui .topbar { display: none; }
+</style>
+</head>
+<body>
+<div id="swagger-ui"></div>
+<script src="/docs/swagger-ui-bundle.js"></script>
+<script>
+window.onload = function () {
+  window.ui = SwaggerUIBundle({
+    url: '/openapi.json',
+    dom_id: '#swagger-ui',
+    // Same origin, same session cookie, so "Try it out" works from a logged-in
+    // browser with no extra setup.
+    requestInterceptor: function (req) { req.credentials = 'same-origin'; return req; },
+    deepLinking: true,
+    docExpansion: 'list',
+    defaultModelsExpandDepth: 1,
+    tryItOutEnabled: true,
+    // No layout override: SwaggerUIStandalonePreset is not bundled, so asking
+    // for StandaloneLayout here would render an empty page.
+  });
+};
+</script>
+</body>
+</html>

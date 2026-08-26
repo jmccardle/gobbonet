@@ -1,0 +1,799 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "GobboNet server",
+    "version": "@BUILD_VERSION@",
+    "description": "The HTTP contract `chat.html` depends on, as served by the Go build. Every route this server answers, in the order the dispatcher tries them.\n\n**Scope.** This describes GobboNet's own API. Three prefixes — `/llm`, `/search` and `/embed` — are reverse proxies onto other programs, and their contracts belong to those programs, not here. The handful of operations under those prefixes that are documented below are the ones GobboNet or the stock frontend actually call; everything else is listed once as a passthrough rather than reproduced, because a copy of somebody else's API is a copy that goes stale without anybody noticing.\n\n**Parity.** `fileserver.ps1` serves the same routes and has no `/docs` or `/openapi.json` of its own. Those two are additions in the Go build.\n\n**Version.** `info.version` is stamped from the running binary, so it is `dev` unless this build came from `build-release.sh`.",
+    "license": {
+      "name": "See LICENSE in the repository"
+    }
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "This server. The UI, the API and the proxies all share one origin and one port."
+    }
+  ],
+  "tags": [
+    { "name": "auth", "description": "Login, logout, and the session cookie everything else needs." },
+    { "name": "status", "description": "What this server is, what it is talking to, and which model is loaded." },
+    { "name": "state", "description": "Cross-device chat state sync." },
+    { "name": "tuning", "description": "llama-server launch arguments the settings panel edits." },
+    { "name": "swap", "description": "Hot-swapping the loaded model. Local mode only." },
+    { "name": "jobs", "description": "Detached generation, so a reply survives the tab that started it." },
+    { "name": "proxy", "description": "Reverse proxies onto llama.cpp, the search relay and the embedding server." },
+    { "name": "docs", "description": "This document, and the page rendering it." },
+    { "name": "static", "description": "The frontend itself." }
+  ],
+  "security": [
+    { "sessionCookie": [] },
+    { "sessionHeader": [] }
+  ],
+  "paths": {
+    "/login": {
+      "get": {
+        "tags": ["auth"],
+        "summary": "The login form",
+        "description": "Always 200, whether or not a session already exists. Reached by navigating; there is no JSON form of this.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The login page.",
+            "content": { "text/html": { "schema": { "type": "string" } } }
+          }
+        }
+      },
+      "post": {
+        "tags": ["auth"],
+        "summary": "Exchange the password for a session",
+        "description": "A form post, not JSON — the login page is plain HTML and works with scripting off.\n\nRate limited per client address before the password is even read, because a constant-time comparison stops an attacker learning the password a byte at a time and does nothing about trying a lot of passwords quickly.\n\nA successful login against a legacy `salt:hash` secret rewrites it as Argon2id in place, with no forced reset and no separate step.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": ["password"],
+                "properties": {
+                  "password": { "type": "string", "format": "password" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "302": {
+            "description": "Authenticated. The session cookie is set and the browser is sent to `/`.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "`gobbonet_session=<token>; Path=/; HttpOnly; SameSite=Lax; Max-Age=<ttl>`. No `Secure` flag: LAN traffic is plain HTTP, and `Secure` would stop the cookie being sent at all.",
+                "schema": { "type": "string" }
+              },
+              "Location": { "schema": { "type": "string", "example": "/" } }
+            }
+          },
+          "400": { "description": "The form body could not be parsed. Returns the login page.", "content": { "text/html": { "schema": { "type": "string" } } } },
+          "401": { "description": "Wrong password. Returns the login page with the error shown.", "content": { "text/html": { "schema": { "type": "string" } } } },
+          "429": {
+            "description": "Too many attempts from this address.",
+            "content": {
+              "text/html": { "schema": { "type": "string" } },
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    },
+    "/logout": {
+      "get": {
+        "tags": ["auth"],
+        "summary": "Revoke the session",
+        "description": "Revokes the token server-side and clears the cookie, then redirects to `/login`. Safe to call without a session.",
+        "security": [],
+        "responses": {
+          "302": {
+            "description": "Session gone.",
+            "headers": { "Location": { "schema": { "type": "string", "example": "/login" } } }
+          }
+        }
+      }
+    },
+    "/favicon.ico": {
+      "get": {
+        "tags": ["auth"],
+        "summary": "The site icon",
+        "description": "Served without a session purely so the login tab is not ugly. With a session it is an ordinary static file.",
+        "security": [],
+        "responses": {
+          "200": { "description": "The icon.", "content": { "image/x-icon": { "schema": { "type": "string", "format": "binary" } } } },
+          "404": { "$ref": "#/components/responses/NotFoundFile" }
+        }
+      }
+    },
+    "/health-fileserver": {
+      "get": {
+        "tags": ["status"],
+        "summary": "Liveness, and what this server can do",
+        "description": "Reports both that this process is alive and whether the upstream it proxies to is. Liveness alone would be close to useless for a proxy: it would say `ok` in exactly the situation you would be using it to debug.\n\nThe upstream probe is cached for three seconds so a polling dashboard cannot turn into a probe storm.\n\nThe field set is the union of what the PowerShell and Python servers each sent, so a client never has to know which server it reached.",
+        "responses": {
+          "200": {
+            "description": "Always, as long as the process is running.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Health" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/active-model.json": {
+      "get": {
+        "tags": ["status"],
+        "summary": "The model that is loaded now",
+        "description": "`defaultCtx` is the context window actually in force, which is the smaller of the configured size and the model's own ceiling. A locally configured default larger than the model's maximum would only produce 400s on every request.\n\n`maxCtx` of 0 means no model has been identified yet, and the client should leave its own input uncapped rather than clamp to zero.",
+        "responses": {
+          "200": { "description": "Current model identity.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ActiveModel" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/models-list.json": {
+      "get": {
+        "tags": ["status"],
+        "summary": "Every model available to swap to",
+        "description": "The model directory is scanned on demand and cached against its mtime, so dropping a GGUF into `models/` makes it appear on the next request with no restart.\n\nThis replaces the static `models-list.json` that `launch.bat` wrote and `fileserver.ps1` rewrote on every swap. There is no mutable file left to fall out of sync.\n\nThe active model is always first in `models`, even when it is not in the scanned directory.",
+        "responses": {
+          "200": { "description": "The dropdown's contents.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ModelsList" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/state": {
+      "get": {
+        "tags": ["state"],
+        "summary": "Download the stored chat state",
+        "description": "Returns the client's own JSON document, byte for byte. The server never looks inside it beyond checking that it parses.\n\nThe body can be several megabytes once threads pile up. Use `/state/info` for the boot-time check and only fetch this once the client has decided to restore.",
+        "responses": {
+          "200": {
+            "description": "The stored document.",
+            "headers": { "X-State-Mtime": { "$ref": "#/components/headers/StateMtime" } },
+            "content": { "application/json": { "schema": {} } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "description": "Nothing has been stored yet.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "no state on server" } } } },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      },
+      "post": {
+        "tags": ["state"],
+        "summary": "Store the chat state",
+        "description": "The body is validated as JSON before anything is written. Persisting a document that does not parse would leave the client unable to restore and unable to tell why.\n\nThe write goes to a temp file in the same directory and is then renamed, so a crash mid-write leaves the previous state intact rather than a truncated file the client would restore from.",
+        "requestBody": { "$ref": "#/components/requestBodies/StateDocument" },
+        "responses": {
+          "200": {
+            "description": "Stored.",
+            "headers": { "X-State-Mtime": { "$ref": "#/components/headers/StateMtime" } },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StateSaved" } } }
+          },
+          "400": { "description": "The body is not valid JSON, or could not be read.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "413": { "description": "Larger than 128 MiB.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "state too large" } } } },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      },
+      "put": {
+        "tags": ["state"],
+        "summary": "Store the chat state (identical to POST)",
+        "description": "Accepted so a client that treats this as a document resource works unchanged. Same validation, same atomic write, same response.",
+        "requestBody": { "$ref": "#/components/requestBodies/StateDocument" },
+        "responses": {
+          "200": {
+            "description": "Stored.",
+            "headers": { "X-State-Mtime": { "$ref": "#/components/headers/StateMtime" } },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StateSaved" } } }
+          },
+          "400": { "description": "The body is not valid JSON, or could not be read.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "413": { "description": "Larger than 128 MiB.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      }
+    },
+    "/state/info": {
+      "get": {
+        "tags": ["state"],
+        "summary": "Metadata about the stored state, without the body",
+        "description": "Three client decisions read `mtime` and `size` by name: auto-restore, quota-truncation recovery, and boot-time conflict detection.\n\nThis route was once missing and the wildcard swallowed it. The client parsed the reply without error, found no top-level `mtime`, and silently concluded the server was empty — real data sat on disk while the user stared at an empty chat. That is why the field names here are pinned by a conformance test.\n\nA write method gets 405 rather than falling through to the store branch, because a POST here means the client is confused about which route it wants and silently accepting it would overwrite state.",
+        "responses": {
+          "200": {
+            "description": "State exists.",
+            "headers": { "X-State-Mtime": { "$ref": "#/components/headers/StateMtime" } },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StateInfo" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "description": "Nothing has been stored yet.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "no state on server" } } } },
+          "405": { "description": "Read methods only.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "method not allowed" } } } }
+        }
+      }
+    },
+    "/perf": {
+      "get": {
+        "tags": ["tuning"],
+        "summary": "Current and automatic llama-server tuning",
+        "description": "`current` is what will be used on the next llama-server start. `auto` is what the hardware probe suggests, which is what a reset returns to. `overridden` mirrors whether `perf.toml` exists.\n\nThe field names are camelCase in a codebase that is otherwise snake_case on the wire. That is upstream's spelling, and one shared frontend file drives both this server and `fileserver.ps1`, so it is pinned rather than tidied.",
+        "responses": {
+          "200": { "description": "Current tuning.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PerfState" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      },
+      "post": {
+        "tags": ["tuning"],
+        "summary": "Save or reset the tuning",
+        "description": "Saving does **not** restart llama-server. The client saves here and then posts the model it already has to `/swap-model`, so the change rides the existing hot-swap path — one lock, one status feed, one thing to debug — instead of a second restart mechanism racing the first.\n\nEvery field is nullable so absent is distinguishable from zero: the panel sends `gpuLayers: 0` to mean CPU-only, and `null` for an input left empty, which must leave that setting alone rather than reset it.\n\nA field that is set is validated against the values already in force, so a request that changes one thing is checked as the combination it will actually produce.\n\n`perf.toml` is written before memory is updated. If the write fails nothing has changed anywhere and the caller is told why, rather than the server running settings that vanish on restart.\n\n`{\"reset\": true}` deletes `perf.toml` instead of writing today's automatic values into it. Writing them would freeze the current guess forever: move the install to a better GPU and the stale numbers would still be in force with nothing recording that they were ever a guess.",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PerfRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved, or reset.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PerfSaveResult" },
+                "examples": {
+                  "saved": { "summary": "A save", "value": { "ok": true, "current": { "ctxSize": 16384, "gpuLayers": 999, "kvCacheType": "q8_0" }, "note": "Saved. Applies on the next llama-server start." } },
+                  "reset": { "summary": "A reset", "value": { "ok": true, "reset": true, "current": { "ctxSize": 8192, "gpuLayers": 33, "kvCacheType": "f16" } } }
+                }
+              }
+            }
+          },
+          "400": { "description": "Unparseable body, or a value out of range. The message names the field and its bounds.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "ctxSize must be a number between 512 and 1048576." } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "405": { "description": "GET or POST only.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "500": { "description": "`perf.toml` could not be written or removed. Nothing changed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/swap-model": {
+      "post": {
+        "tags": ["swap"],
+        "summary": "Load a different model",
+        "description": "Returns 202 as soon as the swap is accepted; poll `/swap-status` for the outcome. One swap at a time.\n\nIn remote mode there is no llama-server to restart and this answers 503 with an explanation, which is the same path `fileserver.ps1` took whenever `launch.bat` had not handed it a server executable. The frontend already renders that as a disabled control rather than an error.",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SwapRequest" } } }
+        },
+        "responses": {
+          "202": { "description": "Swap started.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SwapStatus" } } } },
+          "400": { "description": "Missing or unusable `file`.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SwapStatus" }, "example": { "phase": "error", "message": "expected {\"file\":\"<name>.gguf\"}" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "405": { "description": "POST only.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SwapStatus" } } } },
+          "409": { "description": "A swap is already in flight.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SwapStatus" } } } },
+          "503": { "description": "Remote mode: this server does not run llama.cpp.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SwapStatus" } } } }
+        }
+      }
+    },
+    "/swap-status": {
+      "get": {
+        "tags": ["swap"],
+        "summary": "How the last swap is going",
+        "description": "Always 200. In remote mode the phase is permanently `idle`, because nothing is ever in flight — which the frontend already reads as \"no swap happening\", and which is the truth.",
+        "responses": {
+          "200": { "description": "Current phase.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SwapStatus" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/llm/jobs": {
+      "post": {
+        "tags": ["jobs"],
+        "summary": "Start a detached generation",
+        "description": "The body is a llama.cpp `/v1/chat/completions` request, passed through byte for byte. The reply streams into a server-side buffer that outlives the tab, so closing the browser mid-generation does not lose the answer.\n\nThese routes live under `/llm` on purpose: it keeps the client's relative addressing and the session cookie working unchanged. They are matched **before** the `/llm` proxy, because they are this server's routes and not llama.cpp's.\n\nStarting a job supersedes older ones once the concurrency cap is reached — but only **after** the body is known to be valid JSON. Shedding first and parsing second would let a client bug kill a generation the user is actually reading.",
+        "parameters": [
+          {
+            "name": "thread",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Rides along in the job status. Purely informational; the request body stays byte-exact."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "A llama.cpp chat-completions request. Not interpreted here.",
+          "content": { "application/json": { "schema": {} } }
+        },
+        "responses": {
+          "202": { "description": "Job accepted and running.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/JobCreated" } } } },
+          "400": { "description": "The body is not valid JSON, or could not be read.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "405": { "description": "POST only.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      }
+    },
+    "/llm/jobs/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/JobID" }],
+      "get": {
+        "tags": ["jobs"],
+        "summary": "Poll a job for new output",
+        "description": "Reads the job's buffer from byte `from`. Send `next` back as the following request's `from` to walk the stream.\n\n`chunk_b64` is base64 and not a plain JSON string. That is the wire contract `fileserver.ps1` defined, and the frontend reads `chunk_b64` and nothing else — given a different shape it would leave its offset where it was, compute \"not drained yet\", and poll forever against a job that is streaming perfectly well, with nothing logged anywhere.\n\n`updated_at` is stamped when the terminal status is recorded, so `updated_at - started_at` is the generation's true duration even for a reply that finished while no tab was attached.",
+        "parameters": [
+          { "name": "from", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 0, "default": 0 }, "description": "Byte offset to read from. A negative value is treated as 0." },
+          { "name": "max", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 0, "default": 262144, "maximum": 262144 }, "description": "Most bytes to return. Clamped to 262144." }
+        ],
+        "responses": {
+          "200": { "description": "Job state, plus whatever output is available.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/JobStatus" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/UnknownJob" }
+        }
+      },
+      "delete": {
+        "tags": ["jobs"],
+        "summary": "Forget a job",
+        "description": "A finished job is removed and 200 is returned. A running job is cancelled and 202 is returned; the retention sweep, or a later DELETE, collects it once it has wound down.",
+        "responses": {
+          "200": { "description": "Deleted.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/JobCreated" }, "example": { "id": "0f1e2d3c4b5a69788796a5b4c3d2e1f0", "status": "deleted" } } } },
+          "202": { "description": "Was running. Cancelling.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/JobCreated" }, "example": { "id": "0f1e2d3c4b5a69788796a5b4c3d2e1f0", "status": "cancelling" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/UnknownJob" }
+        }
+      }
+    },
+    "/llm/jobs/{id}/cancel": {
+      "parameters": [{ "$ref": "#/components/parameters/JobID" }],
+      "post": {
+        "tags": ["jobs"],
+        "summary": "Stop a generation but keep what it produced",
+        "description": "Cancels the upstream request, which frees the llama.cpp slot immediately rather than at the end of the generation. The buffered output stays readable until the job is deleted or swept.",
+        "responses": {
+          "200": { "description": "Cancellation requested.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/JobCreated" }, "example": { "id": "0f1e2d3c4b5a69788796a5b4c3d2e1f0", "status": "cancelling" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/UnknownJob" },
+          "405": { "description": "POST only.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/llm/v1/chat/completions": {
+      "post": {
+        "tags": ["proxy"],
+        "summary": "Chat completions (proxied to llama.cpp)",
+        "description": "Documented because it is the one upstream operation this server calls itself, from `/llm/jobs`. The request and response shapes are llama.cpp's, not GobboNet's — see the llama.cpp server documentation for them.\n\nThis is the only upstream that receives the configured API key. There is no write timeout on the connection, because a streaming generation legitimately holds a response open for many minutes; a wedged upstream is bounded by the proxy's own idle watchdog instead.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": {} } } },
+        "responses": {
+          "200": { "description": "llama.cpp's reply, streamed or buffered as requested.", "content": { "application/json": { "schema": {} }, "text/event-stream": { "schema": { "type": "string" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "502": { "$ref": "#/components/responses/BadGateway" }
+        }
+      }
+    },
+    "/llm/{subpath}": {
+      "parameters": [{ "$ref": "#/components/parameters/ProxySubpath" }],
+      "get": {
+        "tags": ["proxy"],
+        "summary": "Anything else on llama.cpp",
+        "description": "Passthrough. GobboNet neither reads nor rewrites these; the contract is llama.cpp's.\n\n`/llm/jobs` and `/llm/jobs/*` are **not** part of this — they are matched first and are documented above as this server's own routes.",
+        "responses": {
+          "default": { "description": "Whatever llama.cpp answered, headers and status unchanged." },
+          "502": { "$ref": "#/components/responses/BadGateway" }
+        }
+      },
+      "post": {
+        "tags": ["proxy"],
+        "summary": "Anything else on llama.cpp",
+        "description": "Passthrough. See the GET description.",
+        "requestBody": { "required": false, "content": { "application/json": { "schema": {} } } },
+        "responses": {
+          "default": { "description": "Whatever llama.cpp answered, headers and status unchanged." },
+          "502": { "$ref": "#/components/responses/BadGateway" }
+        }
+      }
+    },
+    "/search/health": {
+      "get": {
+        "tags": ["proxy"],
+        "summary": "Is the web-search relay up (proxied)",
+        "description": "Documented because the frontend calls it before offering search. The reply shape is the relay's.",
+        "responses": {
+          "200": { "description": "The relay's health reply.", "content": { "application/json": { "schema": {} } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "502": { "$ref": "#/components/responses/BadGateway" }
+        }
+      }
+    },
+    "/search/web_search": {
+      "post": {
+        "tags": ["proxy"],
+        "summary": "Run a web search (proxied)",
+        "description": "Documented because the frontend calls it. The request and reply shapes are the relay's, not GobboNet's.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": {} } } },
+        "responses": {
+          "200": { "description": "The relay's results.", "content": { "application/json": { "schema": {} } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "502": { "$ref": "#/components/responses/BadGateway" }
+        }
+      }
+    },
+    "/search/{subpath}": {
+      "parameters": [{ "$ref": "#/components/parameters/ProxySubpath" }],
+      "get": {
+        "tags": ["proxy"],
+        "summary": "Anything else on the search relay",
+        "description": "Passthrough. No API key is forwarded here.",
+        "responses": {
+          "default": { "description": "Whatever the relay answered." },
+          "502": { "$ref": "#/components/responses/BadGateway" }
+        }
+      },
+      "post": {
+        "tags": ["proxy"],
+        "summary": "Anything else on the search relay",
+        "description": "Passthrough. See the GET description.",
+        "requestBody": { "required": false, "content": { "application/json": { "schema": {} } } },
+        "responses": {
+          "default": { "description": "Whatever the relay answered." },
+          "502": { "$ref": "#/components/responses/BadGateway" }
+        }
+      }
+    },
+    "/embed/v1/embeddings": {
+      "post": {
+        "tags": ["proxy"],
+        "summary": "Embed text for retrieval (proxied)",
+        "description": "Documented because the frontend calls it. The shapes are the embedding server's.\n\nIf nothing is listening this returns 502 and the frontend falls back to tag-only retrieval — a documented degrade, not a silent one.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": {} } } },
+        "responses": {
+          "200": { "description": "The embedding server's reply.", "content": { "application/json": { "schema": {} } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "502": { "$ref": "#/components/responses/BadGateway" }
+        }
+      }
+    },
+    "/embed/{subpath}": {
+      "parameters": [{ "$ref": "#/components/parameters/ProxySubpath" }],
+      "get": {
+        "tags": ["proxy"],
+        "summary": "Anything else on the embedding server",
+        "description": "Passthrough. No API key is forwarded here.",
+        "responses": {
+          "default": { "description": "Whatever the embedding server answered." },
+          "502": { "$ref": "#/components/responses/BadGateway" }
+        }
+      },
+      "post": {
+        "tags": ["proxy"],
+        "summary": "Anything else on the embedding server",
+        "description": "Passthrough. See the GET description.",
+        "requestBody": { "required": false, "content": { "application/json": { "schema": {} } } },
+        "responses": {
+          "default": { "description": "Whatever the embedding server answered." },
+          "502": { "$ref": "#/components/responses/BadGateway" }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "tags": ["docs"],
+        "summary": "This document",
+        "description": "Compiled into the binary, so it always describes the build serving it. `info.version` is stamped from the running binary rather than stored in the file.",
+        "responses": {
+          "200": { "description": "The OpenAPI document.", "content": { "application/json": { "schema": {} } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/docs": {
+      "get": {
+        "tags": ["docs"],
+        "summary": "Swagger UI",
+        "description": "Renders `/openapi.json`. Swagger UI is compiled into the binary rather than loaded from a CDN, so this page works on a machine with no internet connection — which is the situation you are most likely to be in while debugging one.\n\n\"Try it out\" works from a logged-in browser without extra setup, because the request carries the same session cookie the page did.",
+        "responses": {
+          "200": { "description": "The documentation page.", "content": { "text/html": { "schema": { "type": "string" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/docs/{asset}": {
+      "get": {
+        "tags": ["docs"],
+        "summary": "A Swagger UI asset",
+        "description": "Only the two files listed in the schema exist. Anything else is a 404, not a fallback to the page itself.",
+        "parameters": [
+          {
+            "name": "asset",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "enum": ["swagger-ui-bundle.js", "swagger-ui.css"] }
+          }
+        ],
+        "responses": {
+          "200": { "description": "The asset.", "content": { "application/javascript": { "schema": { "type": "string" } }, "text/css": { "schema": { "type": "string" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "description": "No such asset.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/": {
+      "get": {
+        "tags": ["static"],
+        "summary": "The chat frontend",
+        "description": "`/` serves `chat.html`. Every path that matches no route above is looked up as a file under the web root.\n\nTraversal and dotfiles are refused: server internals — the state backup, the swap status, `.git` — all live behind dot names, and everything a client legitimately needs from them has a dedicated route. Symlinks are resolved before the containment check, so a link inside the web root cannot point out of it.\n\nAn unknown extension is served as `application/octet-stream`, which a browser downloads rather than guesses at and executes.",
+        "responses": {
+          "200": { "description": "The file.", "content": { "text/html": { "schema": { "type": "string" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFoundFile" },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "sessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "gobbonet_session",
+        "description": "Set by `POST /login`. HttpOnly, so a browser sends it automatically and scripts cannot read it. Sessions live in memory and do not survive a restart, which caps how long a leaked token is worth anything."
+      },
+      "sessionHeader": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Gobbonet-Token",
+        "description": "The same token, for scripted access where there is no cookie jar. Take it from the `Set-Cookie` on a successful login."
+      }
+    },
+    "parameters": {
+      "JobID": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "The job id from `POST /llm/jobs`.",
+        "schema": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+        "example": "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
+      },
+      "ProxySubpath": {
+        "name": "subpath",
+        "in": "path",
+        "required": true,
+        "description": "The rest of the upstream path. May contain slashes, which OpenAPI path templating does not formally model — read it as a wildcard.",
+        "schema": { "type": "string" },
+        "example": "props"
+      }
+    },
+    "headers": {
+      "StateMtime": {
+        "description": "Milliseconds since the Unix epoch, matching what the PowerShell and Python servers sent. On a read it is stat'd before the body, so it can never advertise an mtime newer than the bytes actually sent.",
+        "schema": { "type": "integer", "format": "int64" }
+      }
+    },
+    "requestBodies": {
+      "StateDocument": {
+        "required": true,
+        "description": "The client's own JSON document. Not interpreted, only validated as JSON. At most 128 MiB.",
+        "content": { "application/json": { "schema": {} } }
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "No valid session. A `GET` that says it accepts `text/html` gets the login page instead of this envelope, so a browser lands on the form while a `fetch()` gets something it can detect and act on.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "error": { "type": "string", "example": "authentication required" },
+                "login": { "type": "string", "example": "/login" }
+              }
+            }
+          },
+          "text/html": { "schema": { "type": "string" } }
+        }
+      },
+      "NotFoundFile": {
+        "description": "No such file under the web root.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "error": { "type": "string", "example": "not found" },
+                "path": { "type": "string" }
+              }
+            }
+          }
+        }
+      },
+      "UnknownJob": {
+        "description": "No job with that id. Jobs are in memory and do not survive a restart.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "error": { "type": "string", "example": "unknown job" },
+                "id": { "type": "string" }
+              }
+            }
+          }
+        }
+      },
+      "BadGateway": {
+        "description": "The upstream is unreachable or not configured. `detail` carries the transport error.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "upstream unreachable", "detail": "dial tcp 127.0.0.1:11437: connect: connection refused" } } }
+      },
+      "ServerError": {
+        "description": "The operation failed on this side. `detail` carries the underlying cause.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "description": "The envelope every failure uses. `detail` is present when the underlying cause is worth surfacing.",
+        "required": ["error"],
+        "properties": {
+          "error": { "type": "string" },
+          "detail": { "type": "string" }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "required": ["status", "version", "pid", "hotswap", "mode", "upstream", "upstream_ok"],
+        "properties": {
+          "status": { "type": "string", "enum": ["ok"] },
+          "version": { "type": "string", "description": "`<release>-go-<short sha>`, or `dev` for an unstamped build.", "example": "1.5.8-go-afb7e0d" },
+          "pid": { "type": "integer", "description": "This process. Useful when two servers are fighting over a port." },
+          "hotswap": { "type": "boolean", "description": "Whether `/swap-model` can do anything. False in remote mode." },
+          "mode": { "type": "string", "enum": ["local", "remote"] },
+          "upstream": { "type": "string", "description": "The llama.cpp base URL this server proxies to.", "example": "http://127.0.0.1:11437" },
+          "upstream_ok": { "type": "boolean", "description": "Whether the upstream answered its own `/health` within the last three seconds." }
+        }
+      },
+      "ActiveModel": {
+        "type": "object",
+        "required": ["id", "name", "family", "ggufFile", "maxCtx", "defaultCtx", "thinkingFormat"],
+        "properties": {
+          "id": { "type": "string", "description": "Stable identifier the frontend's model registry keys on.", "example": "qwen3-30b" },
+          "name": { "type": "string", "description": "Display name." },
+          "family": { "type": "string", "description": "Model family.", "example": "qwen" },
+          "ggufFile": { "type": "string", "description": "File name inside the model directory. Empty when the model is remote and unidentified." },
+          "maxCtx": { "type": "integer", "description": "The model's own ceiling. 0 means unknown, and the client should not cap its input." },
+          "defaultCtx": { "type": "integer", "description": "The window in force: the configured size, or the model's ceiling if that is smaller." },
+          "thinkingFormat": { "$ref": "#/components/schemas/ThinkingFormat" }
+        }
+      },
+      "ThinkingFormat": {
+        "type": "string",
+        "description": "How this model emits reasoning, using the frontend registry's names.\n\n- `none` — no thinking (Llama, Mistral, Phi, Gemma 3 base)\n- `deepseek` — `<think>...</think>` (R1, Qwen3, QwQ, GLM thinking)\n- `harmony` — gpt-oss channels\n- `gemma` — Gemma channel thinking (Gemma 4)",
+        "enum": ["none", "deepseek", "harmony", "gemma"]
+      },
+      "ModelRecord": {
+        "type": "object",
+        "description": "One entry in the model dropdown. Detection lives in one place, which is why the dropdown, the swap launcher and the initial launch can never disagree.",
+        "required": ["file", "id", "name", "family", "thinkingFormat", "maxCtx", "useJinja", "chatTemplate", "chatTemplateFile", "templateHash", "active"],
+        "properties": {
+          "file": { "type": "string", "description": "File name inside the model directory." },
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "family": { "type": "string" },
+          "thinkingFormat": { "$ref": "#/components/schemas/ThinkingFormat" },
+          "maxCtx": { "type": "integer" },
+          "useJinja": { "type": "integer", "description": "Whether llama-server is launched with `--jinja`. An integer, not a boolean, because that is upstream's spelling.", "enum": [0, 1] },
+          "chatTemplate": { "type": "string", "description": "Built-in template name to pass to llama-server, when one is needed." },
+          "chatTemplateFile": { "type": "string", "description": "Path to a sidecar template file, when one was found." },
+          "templateHash": { "type": "string", "description": "SHA-256 of the template embedded in the GGUF. This is what recognises a template byte-for-byte." },
+          "active": { "type": "boolean", "description": "Whether this is the loaded model." }
+        }
+      },
+      "ModelsList": {
+        "type": "object",
+        "required": ["active", "models"],
+        "properties": {
+          "active": { "type": "string", "description": "File name of the loaded model, or empty." },
+          "models": { "type": "array", "description": "The active model first, then the directory scan with duplicates removed.", "items": { "$ref": "#/components/schemas/ModelRecord" } }
+        }
+      },
+      "StateInfo": {
+        "type": "object",
+        "required": ["mtime", "size"],
+        "properties": {
+          "mtime": { "type": "integer", "format": "int64", "description": "Milliseconds since the Unix epoch. The client compares this against its own `Date.now()` timestamps." },
+          "size": { "type": "integer", "format": "int64", "description": "Bytes. The client uses this to notice its local copy was truncated by a storage quota." }
+        }
+      },
+      "StateSaved": {
+        "type": "object",
+        "required": ["status", "mtime"],
+        "properties": {
+          "status": { "type": "string", "enum": ["ok"] },
+          "mtime": { "type": "integer", "format": "int64", "description": "The mtime of what was just written, so the client can record it without a second request." }
+        }
+      },
+      "PerfTriple": {
+        "type": "object",
+        "description": "One set of llama-server launch arguments.",
+        "required": ["ctxSize", "gpuLayers", "kvCacheType"],
+        "properties": {
+          "ctxSize": { "type": "integer", "minimum": 512, "maximum": 1048576, "description": "Context window, in tokens." },
+          "gpuLayers": { "type": "integer", "minimum": 0, "maximum": 999, "description": "Layers offloaded to the GPU. 0 is CPU-only; 999 means all of them." },
+          "kvCacheType": { "type": "string", "enum": ["f16", "q8_0", "q4_0"], "description": "KV cache quantisation." }
+        }
+      },
+      "PerfState": {
+        "type": "object",
+        "required": ["current", "auto", "overridden", "modelMaxCtx"],
+        "properties": {
+          "current": { "$ref": "#/components/schemas/PerfTriple" },
+          "auto": { "$ref": "#/components/schemas/PerfTriple" },
+          "overridden": { "type": "boolean", "description": "Whether `perf.toml` exists, and so whether `current` is a saved choice rather than the hardware probe's guess." },
+          "modelMaxCtx": { "type": "integer", "description": "The loaded model's ceiling, so the panel can cap its own input and a number the server would refuse cannot be typed. 0 means unknown; leave the input uncapped." }
+        }
+      },
+      "PerfRequest": {
+        "type": "object",
+        "description": "Send `reset: true` on its own, or any subset of the three settings. A field left out, or sent as null, is unchanged.",
+        "properties": {
+          "reset": { "type": "boolean", "description": "Delete `perf.toml` and return to the automatic values. Ignores the other fields." },
+          "ctxSize": { "type": "integer", "nullable": true, "minimum": 512, "maximum": 1048576 },
+          "gpuLayers": { "type": "integer", "nullable": true, "minimum": 0, "maximum": 999, "description": "0 means CPU-only and is a real value, not an absence." },
+          "kvCacheType": { "type": "string", "nullable": true, "enum": ["f16", "q8_0", "q4_0", ""], "description": "An empty string is treated as absent." }
+        }
+      },
+      "PerfSaveResult": {
+        "type": "object",
+        "required": ["ok", "current"],
+        "properties": {
+          "ok": { "type": "boolean", "enum": [true] },
+          "current": { "$ref": "#/components/schemas/PerfTriple" },
+          "reset": { "type": "boolean", "description": "Present and true only on a reset." },
+          "note": { "type": "string", "description": "Present on a save. Says when the change takes effect.", "example": "Saved. Applies on the next llama-server start." }
+        }
+      },
+      "SwapRequest": {
+        "type": "object",
+        "required": ["file"],
+        "properties": {
+          "file": { "type": "string", "description": "A file name from `/models-list.json`, not a path.", "example": "Qwen3-30B-A3B-Q4_K_M.gguf" }
+        }
+      },
+      "SwapStatus": {
+        "type": "object",
+        "description": "Also the error envelope for `/swap-model`, so a client polling status and a client reading an error parse the same shape.",
+        "required": ["phase"],
+        "properties": {
+          "phase": { "type": "string", "enum": ["idle", "starting", "ready", "error"] },
+          "file": { "type": "string", "description": "The model being loaded or loaded." },
+          "name": { "type": "string", "description": "Its display name." },
+          "message": { "type": "string", "description": "Why, when the phase is `error`." },
+          "started_at": { "type": "integer", "format": "int64", "description": "Unix seconds." },
+          "updated_at": { "type": "integer", "format": "int64", "description": "Unix seconds." }
+        }
+      },
+      "JobCreated": {
+        "type": "object",
+        "required": ["id", "status"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+          "status": { "type": "string", "example": "running" }
+        }
+      },
+      "JobStatus": {
+        "type": "object",
+        "required": ["id", "status", "size", "next"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+          "status": {
+            "type": "string",
+            "description": "`interrupted` means a newer job superseded this one at the concurrency cap.",
+            "enum": ["running", "done", "cancelled", "error", "interrupted"]
+          },
+          "size": { "type": "integer", "description": "Total bytes buffered so far. The client is drained when its offset reaches this and the status is terminal." },
+          "next": { "type": "integer", "description": "Offset to send as `from` on the next poll." },
+          "chunk_b64": { "type": "string", "format": "byte", "description": "Base64 of the bytes from `from`. Absent when there is nothing new — not an empty string." },
+          "error": { "type": "string", "description": "Present only when the status is `error`." },
+          "started_at": { "type": "integer", "format": "int64", "description": "Unix seconds, set at creation." },
+          "updated_at": { "type": "integer", "format": "int64", "description": "Unix seconds, stamped when the terminal status is recorded." }
+        }
+      }
+    }
+  }
+}
