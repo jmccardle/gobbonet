@@ -29,6 +29,15 @@ behind #47, #48 and #27. It drives the real `loadModelsList` /
 path has drifted back to a hardcoded model name. Background is in
 [`docs/changelog/CHANGELOG-1.7.3-remote-model-list.md`](../docs/changelog/CHANGELOG-1.7.3-remote-model-list.md).
 
+`test-diagnostics-render.mjs` covers the connection report behind the header
+status label. Two properties carry the suite: every string it renders arrives
+off the wire, so nothing in a report may become markup (the escaping block
+injects a payload into fourteen fields and then checks that no event-handler
+attribute reached the DOM); and a section that could not be collected must say
+so, because a panel that renders blank on error is the same bug this feature
+replaces wearing a bigger box. Background is in
+[`docs/changelog/CHANGELOG-1.7-connection-diagnostics.md`](../docs/changelog/CHANGELOG-1.7-connection-diagnostics.md).
+
 Two of them cover the same area from opposite ends: `test-cast-identity.mjs`
 checks that a past message keeps the character that wrote it, and
 `test-cast-mismatch.mjs` checks the notice shown when the *next* reply would

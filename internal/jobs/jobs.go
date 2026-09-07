@@ -403,6 +403,53 @@ func (m *Manager) supersede() bool {
 	return true
 }
 
+// Record is one job reduced to metadata, for the debug report.
+type Record struct {
+	ID        string
+	Status    string
+	Error     string
+	Bytes     int
+	StartedAt int64
+	UpdatedAt int64
+}
+
+// Recent returns up to n jobs, newest first.
+//
+// Built from snapshot(), which returns the spool's LENGTH and never its
+// contents, so a generated reply cannot reach a report through this path. The
+// length is worth carrying on its own: a job that errored at zero bytes failed
+// before the model produced anything, and one that errored at four kilobytes
+// was cut off mid-answer, and those are different bugs with different causes.
+func (m *Manager) Recent(n int) []Record {
+	m.mu.Lock()
+	jobs := make([]*Job, 0, len(m.jobs))
+	for _, j := range m.jobs {
+		jobs = append(jobs, j)
+	}
+	m.mu.Unlock()
+
+	// seq is the creation order and is stable after the fact, unlike updatedAt,
+	// which a late cancellation can reorder.
+	sort.Slice(jobs, func(a, b int) bool { return jobs[a].seq > jobs[b].seq })
+	if len(jobs) > n {
+		jobs = jobs[:n]
+	}
+
+	out := make([]Record, 0, len(jobs))
+	for _, j := range jobs {
+		status, errMsg, size, startedAt, updatedAt := j.snapshot()
+		out = append(out, Record{
+			ID:        j.ID,
+			Status:    status,
+			Error:     errMsg,
+			Bytes:     size,
+			StartedAt: startedAt,
+			UpdatedAt: updatedAt,
+		})
+	}
+	return out
+}
+
 func (m *Manager) get(id string) (*Job, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

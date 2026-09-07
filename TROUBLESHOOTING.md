@@ -1,6 +1,32 @@
 # Troubleshooting GobboNet
 
-Most problems land in one of four buckets. Work down in order — the first
+## Start here: open the connection report
+
+In the chat header, next to the model name, is the status label — `Connected`,
+`No connection`, `Error: 502`. **Click it.** It opens a report of what GobboNet
+can and cannot reach right now, how this install is configured, what the model
+server last said, and why the last few replies ended the way they did.
+
+Press **COPY REPORT** and paste the result into your bug report. It contains
+everything a maintainer would otherwise have to ask you for one question at a
+time — version and how the binary was built, your OS and locale, every path and
+whether it exists, the changed settings, and llama.cpp's own error output.
+
+It never contains your password, an API key, or anything from your
+conversations. Saved chats are counted, never read.
+
+**No terminal required.** If you prefer one, or the server will not start at
+all, the same report comes from:
+
+```
+gobbonet debug-report
+```
+
+which also offers to send one short test message to the model and report exactly
+what came back. It answers `n` by default, does not need your password, and
+reads none of your chats.
+
+Most problems land in one of the buckets below. Work down in order — the first
 one is far more common than people expect.
 
 ---

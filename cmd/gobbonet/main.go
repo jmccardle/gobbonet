@@ -153,6 +153,8 @@ func run(argv []string) error {
 		return cmdCheck(argv)
 	case "doctor":
 		return cmdDoctor(argv)
+	case "debug-report":
+		return cmdDebugReport(argv)
 	case "config":
 		return cmdConfig(argv)
 	case "version", "-v", "--version":
@@ -178,6 +180,8 @@ func usage() {
   gobbonet uninstall [--keep-models] [--remove-models] [--yes]
   gobbonet check [--config PATH]
   gobbonet doctor [--config PATH]
+  gobbonet debug-report [--config PATH] [--json] [--out FILE]
+                        [--no-probe] [--redact-home] [--yes | --no-test]
   gobbonet config get [--config PATH] <key>
   gobbonet config set [--config PATH] <key> <value>
   gobbonet config keys

@@ -22,6 +22,7 @@
 <link rel="stylesheet" href="css/15-lore-view.css">
 <link rel="stylesheet" href="css/16-math.css">
   <link rel="stylesheet" href="css/17-markdown.css">
+  <link rel="stylesheet" href="css/18-diagnostics.css">
 </head>
 <body>
 
@@ -76,7 +77,15 @@
       <span class="lore-chip" id="lore-chip" style="display:none" role="button" tabindex="0"
             onclick="openLoreInspector()"
             onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openLoreInspector();}"></span>
-      <span class="status-label" id="status-label">Checking...</span>
+      <!-- The status label is the entry point to the diagnostics report. It
+           stays a status first and a control second: same styling, plus an
+           underline on hover. Keyboard-operable like the lore chip above,
+           because it is now the only route to the information a stuck user
+           needs. -->
+      <span class="status-label" id="status-label" role="button" tabindex="0"
+            title="Connection details — open the report to share when asking for help"
+            onclick="openDiagnostics()"
+            onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openDiagnostics();}">Checking...</span>
       <span class="status-dot" id="status-dot"></span>
       <span class="privacy-badge" id="privacy-badge" title="llama.cpp — fully offline, zero telemetry">&#128274;</span>
     </div>
@@ -953,6 +962,35 @@ gobbo.every(5, async () =&gt; {
   </div>
 </div>
 
+<!-- CONNECTION DIAGNOSTICS MODAL
+     Opened from the status label in the chat header. Everything in it is
+     fetched from /diagnostics.json and rendered by js/24-diagnostics.js;
+     nothing here is populated at page load, because a report gathered when
+     the tab was opened would be stale by the time anyone looked at it. -->
+<div class="modal-backdrop" id="diag-modal">
+  <div class="modal diag">
+    <h2>CONNECTION</h2>
+    <div class="form-hint" style="margin-bottom:14px;">
+      What GobboNet can and cannot reach right now, how this install is
+      configured, and what the model server last said. If you are asking for
+      help, press COPY REPORT and paste the result &mdash; it is everything a
+      maintainer would otherwise have to ask you for, one question at a time.
+    </div>
+    <div id="diag-body"></div>
+    <textarea id="diag-copy-fallback" readonly aria-label="Report text, select all and copy"></textarea>
+    <p class="diag-privacy">
+      The report names your file paths, hostname and local network addresses,
+      and describes your settings. It never contains your password, an API key,
+      or anything from your conversations &mdash; saved chats are counted, never read.
+    </p>
+    <div class="modal-actions">
+      <button class="btn" onclick="refreshDiagnostics()">REFRESH</button>
+      <button class="btn" onclick="copyDiagnostics(this)">COPY REPORT</button>
+      <button class="btn btn-fill" onclick="closeDiagnostics()">CLOSE</button>
+    </div>
+  </div>
+</div>
+
 <!-- ABOUT MODAL -->
 <div class="modal-backdrop" id="lore-inspect-modal">
   <div class="modal lore-inspect">
@@ -1046,6 +1084,7 @@ gobbo.every(5, async () =&gt; {
 <script src="js/21-data.js"></script>
 <script src="js/22-scheduler.js"></script>
 <script src="js/23-card-code.js"></script>
-<script src="js/24-boot.js"></script>
+<script src="js/24-diagnostics.js"></script>
+<script src="js/25-boot.js"></script>
 </body>
 </html>

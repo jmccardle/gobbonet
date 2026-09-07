@@ -77,6 +77,35 @@ func (s *SessionStore) Validate(token, clientID string) bool {
 	return subtle.ConstantTimeCompare([]byte(sess.clientID), []byte(clientID)) == 1
 }
 
+// Session states reported by Diagnose.
+const (
+	SessionValid = "valid"
+	SessionNone  = "none"
+	SessionStale = "stale"
+)
+
+// Diagnose reports why a request is or is not authenticated, for the debug
+// report. It answers the one question a locked-out user has: was I never signed
+// in here, or was I signed in and something ended it?
+//
+// Only three states, and the coarseness is deliberate. Validate distinguishes an
+// unknown token from an expired one from a live token presented by the wrong
+// client, but reporting those apart would tell whoever holds a copied cookie
+// that their token is real and only the fingerprint is missing. ClientFingerprint
+// is documented as a cheap extra bar rather than an identity, so it should not be
+// handed a hint. "stale" carries the whole of the actionable meaning — sign in
+// again — and a server restart, an expiry and a changed password are genuinely
+// indistinguishable from the outside anyway.
+func (s *SessionStore) Diagnose(token, clientID string) string {
+	if token == "" {
+		return SessionNone
+	}
+	if s.Validate(token, clientID) {
+		return SessionValid
+	}
+	return SessionStale
+}
+
 func (s *SessionStore) Revoke(token string) {
 	if token == "" {
 		return

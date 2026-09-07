@@ -36,6 +36,12 @@ build reports it from `gobbonet version`, the startup banner, and
 `/health-fileserver` — the last so a tester can copy a build identity out of a
 browser without a terminal.
 
+`/diagnostics.json` goes further: it reports not just the stamp but how the
+binary came to exist — release build, clean local build, or a tree with
+uncommitted edits — by cross-checking the ldflags version against the VCS
+metadata the toolchain embeds on its own. See
+[`CHANGELOG-1.7-connection-diagnostics.md`](changelog/CHANGELOG-1.7-connection-diagnostics.md).
+
 The release half is **upstream's number, not ours**. This port tracks a
 GobboNet release; a build stamped `1.5.1-go-<sha>` on a tree carrying 1.5.8's
 frontend names a release it is not built from, and says so everywhere the

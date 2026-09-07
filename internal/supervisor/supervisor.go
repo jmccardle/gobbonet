@@ -185,6 +185,29 @@ func (s *Supervisor) Status() Status {
 	return s.status
 }
 
+// StderrTail returns the last n non-empty lines llama-server wrote.
+//
+// The supervisor has captured this since it replaced Get-LlamaStartupError, and
+// LastError below has always mined it for a single actionable line, but nothing
+// ever published the surrounding context. A user shown "Error: 502" is looking
+// at a proxy's opinion; this is llama-server's own account, and it routinely
+// names the exact GGUF it could not open or the exact allocation that failed.
+func (s *Supervisor) StderrTail(n int) string {
+	if s == nil || s.stderr == nil {
+		return ""
+	}
+	return s.stderr.Tail(n)
+}
+
+// StderrLastError is the one line the ring picked out as a diagnosis, or "" if
+// nothing in the buffer looks like one.
+func (s *Supervisor) StderrLastError() string {
+	if s == nil || s.stderr == nil {
+		return ""
+	}
+	return s.stderr.LastError()
+}
+
 func (s *Supervisor) setStatus(phase, file, name, message string, startedAt int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

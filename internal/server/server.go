@@ -7,6 +7,7 @@
 //	/favicon.ico               unauthenticated (so the login tab isn't ugly)
 //	-------------------------- auth gate --------------------------
 //	/health-fileserver         liveness, plus what this server is capable of
+//	/diagnostics.json          the full debug report; answers before the gate
 //	/active-model.json         model identity for the UI
 //	/models-list.json          the header dropdown
 //	/catalog.json              the download catalogue, for the add-a-model modal
@@ -106,6 +107,11 @@ type Server struct {
 	// — the same reason the build stamp is served there.
 	bindMu sync.RWMutex
 	bind   *Bind
+
+	// started is when this process came up, reported as uptime in the debug
+	// report. "How long has it been like this" separates a server that has been
+	// wedged since boot from one that broke on the last model swap.
+	started time.Time
 }
 
 // New builds a Server. sup may be nil, which selects remote mode behaviour for
@@ -119,6 +125,7 @@ func New(cfg config.Config, mode config.Mode, sup *supervisor.Supervisor) (*Serv
 		sup:      sup,
 		secret:   cfg.AccessSecret,
 		tuning:   newTuning(cfg),
+		started:  time.Now(),
 	}
 
 	s.info = models.NewInfo(cfg.LLMURL, cfg.LLMAPIKey, cfg.ModelDir, mode == config.ModeLocal)
@@ -206,6 +213,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/favicon.ico" && !s.authenticated(r):
 		// Served without auth purely so the login tab isn't ugly.
 		static.Serve(w, r, s.cfg.WebRoot, "/favicon.ico")
+		return
+
+	// Answers on both sides of the gate, with different payloads. A report
+	// whose whole purpose is explaining why someone cannot get in has to be
+	// reachable by someone who cannot get in; see handleDiagnostics for what
+	// the unauthenticated half contains and why it probes nothing.
+	case path == "/diagnostics.json":
+		s.handleDiagnostics(w, r)
 		return
 	}
 

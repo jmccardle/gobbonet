@@ -1,0 +1,230 @@
+/* @gobbonet-split css/18-diagnostics.css
+   Connection diagnostics modal, opened from the header status label.
+   Load order is a contract -- see REFACTOR-PLAN.md before reordering.
+   @end-split-header */
+/* ========================================================
+   CONNECTION DIAGNOSTICS
+
+   Denser than the rest of the app on purpose. This panel is a
+   report, not a screen to live in: the reader is scanning for the
+   one red row that explains why nothing works, and generous
+   spacing would push it below the fold.
+======================================================== */
+
+/* The status label is now a control. It has to keep reading as a
+   status first -- it is the thing telling you whether the model is
+   there -- so the affordance is an underline on hover rather than
+   button chrome that would compete with the pill beside it. */
+.status-label {
+  cursor: pointer;
+  border-bottom: 1px dashed transparent;
+  transition: border-color 0.2s, color 0.2s;
+}
+.status-label:hover,
+.status-label:focus-visible {
+  border-bottom-color: currentColor;
+  outline: none;
+}
+.status-label:focus-visible {
+  outline: 1px solid var(--cyan-bright);
+  outline-offset: 3px;
+}
+
+.modal.diag {
+  max-width: 900px;
+}
+
+.diag-loading {
+  padding: 40px 0;
+  text-align: center;
+  color: var(--cyan-mid);
+  font-size: 13px;
+  letter-spacing: 1px;
+}
+
+.diag-section { margin-bottom: 22px; }
+
+.diag-section-label {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--magenta);
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(217, 0, 255, 0.15);
+}
+
+.diag-sub {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--cyan-mid);
+  margin: 14px 0 6px;
+}
+
+/* --- key/value ------------------------------------------------ */
+.diag-kv { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.diag-kv th {
+  text-align: left;
+  vertical-align: top;
+  width: 130px;
+  padding: 4px 10px 4px 0;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.4);
+  white-space: nowrap;
+}
+.diag-kv td {
+  padding: 4px 0;
+  color: rgba(255, 255, 255, 0.75);
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+/* --- tables --------------------------------------------------- */
+/* Wrapped in its own scroll container rather than allowed to widen
+   the modal: a long upstream URL or a llama.cpp error line would
+   otherwise push the whole panel sideways. */
+.diag-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  display: block;
+  overflow-x: auto;
+}
+.diag-table th {
+  text-align: left;
+  padding: 5px 10px 5px 0;
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.3);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.diag-table td {
+  padding: 6px 10px 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  vertical-align: top;
+  color: rgba(255, 255, 255, 0.7);
+  line-height: 1.45;
+}
+.diag-table tr.diag-row-bad td { background: rgba(255, 0, 60, 0.05); }
+
+.diag-detail { word-break: break-word; max-width: 46ch; }
+.diag-url { font-size: 10.5px; color: rgba(255, 255, 255, 0.28); word-break: break-all; }
+
+.diag-good { color: var(--green-neon); }
+.diag-bad { color: var(--red-neon); }
+.diag-neutral { color: rgba(255, 255, 255, 0.75); }
+
+/* --- callouts -------------------------------------------------- */
+.diag-notice,
+.diag-error-line,
+.diag-warn-line {
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin: 8px 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.diag-notice {
+  border: 1px solid rgba(255, 0, 60, 0.25);
+  background: rgba(255, 0, 60, 0.05);
+  color: rgba(255, 255, 255, 0.75);
+}
+.diag-notice b { display: block; color: var(--red-neon); margin-bottom: 4px; }
+
+.diag-error-line {
+  border-left: 2px solid var(--red-neon);
+  background: rgba(255, 0, 60, 0.05);
+  color: rgba(255, 255, 255, 0.7);
+}
+.diag-warn-line {
+  border-left: 2px solid var(--magenta);
+  background: rgba(217, 0, 255, 0.05);
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.diag-hint {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+  line-height: 1.6;
+  margin: 6px 0;
+}
+
+.diag-test {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  font-size: 12.5px;
+  line-height: 1.55;
+  border: 1px solid var(--border);
+}
+.diag-test.diag-good { border-color: rgba(0, 255, 115, 0.25); background: rgba(0, 255, 115, 0.04); }
+.diag-test.diag-bad { border-color: rgba(255, 0, 60, 0.25); background: rgba(255, 0, 60, 0.04); }
+
+/* --- preformatted --------------------------------------------- */
+.diag-section pre,
+.diag-error {
+  background: var(--black);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  margin: 8px 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.65);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.diag-error { border-color: rgba(255, 0, 60, 0.3); color: #ffb3c1; }
+
+.diag-details { margin: 8px 0; }
+.diag-details > summary {
+  cursor: pointer;
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--cyan-mid);
+  padding: 4px 0;
+}
+.diag-details > summary:hover { color: var(--cyan-bright); }
+
+.diag-section code {
+  font-size: 11.5px;
+  color: var(--cyan-bright);
+  word-break: break-all;
+}
+
+/* The clipboard fallback for plain-HTTP origins, where
+   navigator.clipboard is unavailable. Hidden until needed. */
+#diag-copy-fallback {
+  display: none;
+  width: 100%;
+  height: 120px;
+  margin-top: 10px;
+  background: var(--black);
+  border: 1px solid var(--cyan-dim);
+  border-radius: var(--radius);
+  color: rgba(255, 255, 255, 0.7);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 8px;
+  resize: vertical;
+}
+
+.diag-privacy {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.35);
+  line-height: 1.6;
+  margin-top: 4px;
+}
+
+@media (max-width: 700px) {
+  .diag-kv th { width: 92px; font-size: 11px; }
+  .diag-detail { max-width: none; }
+}
